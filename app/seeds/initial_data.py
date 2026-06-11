@@ -48,7 +48,7 @@ DEPARTMENTS: tuple[DepartmentSeed, ...] = (
 
 USERS: tuple[UserSeed, ...] = (
     UserSeed(
-        email="admin@example.com",
+        email="admin@ndkc.edu.ph",
         first_name="Test",
         last_name="Admin",
         employee_number="ADM-001",
@@ -57,7 +57,7 @@ USERS: tuple[UserSeed, ...] = (
         is_superuser=True,
     ),
     UserSeed(
-        email="hr@example.com",
+        email="hr@ndkc.edu.ph",
         first_name="Test",
         last_name="HR",
         employee_number="HR-001",
@@ -65,7 +65,7 @@ USERS: tuple[UserSeed, ...] = (
         department_code="HR",
     ),
     UserSeed(
-        email="employee@example.com",
+        email="employee@ndkc.edu.ph",
         first_name="Test",
         last_name="Employee",
         employee_number="EMP-001",
@@ -172,8 +172,8 @@ async def seed_initial_data(session: AsyncSession) -> None:
         for seed in USERS
     }
 
-    employee = users["employee@example.com"]
-    hr_user = users["hr@example.com"]
+    employee = users["employee@ndkc.edu.ph"]
+    hr_user = users["hr@ndkc.edu.ph"]
 
     await _upsert_leave_credit(session, employee.id, credits=15, used_credits=3)
     session.add(

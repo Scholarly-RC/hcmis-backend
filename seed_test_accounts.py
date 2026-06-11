@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import hash_password
 import app.db.base  # noqa: F401
 from app.core.security import hash_password
 from app.db.session import async_session_maker
@@ -29,7 +30,7 @@ class SeedAccount:
 
 SEED_ACCOUNTS: tuple[SeedAccount, ...] = (
     SeedAccount(
-        email="admin@example.com",
+        email="admin@ndkc.edu.ph",
         first_name="Test",
         last_name="Admin",
         employee_number="ADM-001",
@@ -39,7 +40,7 @@ SEED_ACCOUNTS: tuple[SeedAccount, ...] = (
         is_superuser=True,
     ),
     SeedAccount(
-        email="hr@example.com",
+        email="hr@ndkc.edu.ph",
         first_name="Test",
         last_name="HR",
         employee_number="HR-001",
@@ -48,7 +49,7 @@ SEED_ACCOUNTS: tuple[SeedAccount, ...] = (
         department_code="HR",
     ),
     SeedAccount(
-        email="employee@example.com",
+        email="employee@ndkc.edu.ph",
         first_name="Test",
         last_name="Employee",
         employee_number="EMP-001",
