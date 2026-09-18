@@ -33,7 +33,7 @@ from app.models.special_requests import OfficialBusinessRequest  # noqa: F401
 from app.models.training import Training  # noqa: F401
 from app.models.training import TrainingParticipant  # noqa: F401
 from app.models.training import TrainingParticipantAttachment  # noqa: F401
-from app.models.user import User  # noqa: F401
+from app.models.user import User, UserSalaryAssignment  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

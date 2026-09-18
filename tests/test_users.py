@@ -1,5 +1,6 @@
 import anyio
 from datetime import date
+from decimal import Decimal
 from typing import cast
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from app.models.payroll import Position
 from app.models.user import User
 from app.models.user import UserEmploymentMovement
 from app.models.user import UserPositionAssignment
+from app.models.user import UserSalaryAssignment
 from app.schemas.user import UserBiometricUpdateRequest
 from app.schemas.user import UserUpdateRequest
 from app.services import users as user_service
@@ -138,6 +140,39 @@ class FakeUserPositionAssignmentRepository:
         return assignment
 
 
+class FakeUserSalaryAssignmentRepository:
+    items: dict[int, UserSalaryAssignment] = {}
+    next_id = 1
+
+    def __init__(self, session):
+        self.session = session
+
+    async def get_overlapping_assignments(
+        self,
+        user_id: UUID,
+        effective_from,
+        effective_to,
+        exclude_assignment_id=None,
+    ):
+        return [
+            item
+            for item in self.items.values()
+            if item.user_id == user_id
+            and item.id != exclude_assignment_id
+            and (item.effective_to is None or item.effective_to >= effective_from)
+        ]
+
+    async def create(self, assignment: UserSalaryAssignment):
+        assignment.id = self.next_id
+        self.next_id += 1
+        self.items[assignment.id] = assignment
+        return assignment
+
+    async def save(self, assignment: UserSalaryAssignment):
+        self.items[assignment.id] = assignment
+        return assignment
+
+
 class FakeUserEmploymentMovementRepository:
     items: list[UserEmploymentMovement] = []
 
@@ -196,6 +231,8 @@ def setup_function():
     FakePositionRepository.positions = {}
     FakeUserPositionAssignmentRepository.items = {}
     FakeUserPositionAssignmentRepository.next_id = 1
+    FakeUserSalaryAssignmentRepository.items = {}
+    FakeUserSalaryAssignmentRepository.next_id = 1
     FakeUserEmploymentMovementRepository.items = []
 
 
@@ -205,12 +242,11 @@ def _make_department(department_id: int, name: str):
     return department
 
 
-def _make_position(position_id: int, code: str, title: str = "Position", salary_grade: int = 1):
+def _make_position(position_id: int, code: str, title: str = "Position"):
     position = Position(
         id=position_id,
         code=code,
         title=title,
-        salary_grade=salary_grade,
         is_active=True,
     )
     position.departments = []
@@ -374,6 +410,11 @@ def test_update_user_creates_position_assignment_history(monkeypatch):
     )
     monkeypatch.setattr(
         user_service,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
+    )
+    monkeypatch.setattr(
+        user_service,
         "UserEmploymentMovementRepository",
         FakeUserEmploymentMovementRepository,
     )
@@ -383,22 +424,23 @@ def test_update_user_creates_position_assignment_history(monkeypatch):
         user.id,
         UserUpdateRequest(
             position_id=1,
-            rank_level=2,
-            step_number=1,
+            monthly_salary=Decimal("25000.00"),
             assignment_effective_from=date(2026, 1, 1),
         ),
     )
 
     assert response.position_id == 1
-    assert response.rank_level == 2
-    assert response.step_number == 1
-    assert response.rank == "OPS-2 - STEP 1"
+    assert response.monthly_salary == Decimal("25000.00")
     assert len(FakeUserPositionAssignmentRepository.items) == 1
     assignment = next(iter(FakeUserPositionAssignmentRepository.items.values()))
     assert assignment.changed_by == UUID(int=99)
+    assert len(FakeUserSalaryAssignmentRepository.items) == 1
+    salary_assignment = next(iter(FakeUserSalaryAssignmentRepository.items.values()))
+    assert salary_assignment.monthly_salary == Decimal("25000.00")
+    assert salary_assignment.changed_by == UUID(int=99)
 
     movement_fields = [movement.field_name for movement in FakeUserEmploymentMovementRepository.items]
-    assert movement_fields == ["position_id", "rank", "rank_level", "step_number"]
+    assert movement_fields == ["monthly_salary", "position_id"]
     assert all(movement.changed_by == UUID(int=99) for movement in FakeUserEmploymentMovementRepository.items)
 
 
@@ -447,13 +489,13 @@ def test_update_user_employment_change_requires_effective_date(monkeypatch):
         raise AssertionError("Expected ConflictError to be raised")
 
 
-def test_user_update_request_normalizes_and_validates_rank():
-    payload = UserUpdateRequest(rank=" ops-2 - step 3 ")
-    assert payload.rank == "OPS-2 - STEP 3"
+def test_user_update_request_accepts_direct_salary_and_rejects_negative_salary():
+    payload = UserUpdateRequest(monthly_salary=Decimal("25000.50"))
+    assert payload.monthly_salary == Decimal("25000.50")
 
     try:
-        UserUpdateRequest(rank="Supervisor")
-        raise AssertionError("Expected ValidationError for invalid rank format.")
+        UserUpdateRequest(monthly_salary=Decimal("-1.00"))
+        raise AssertionError("Expected ValidationError for negative salary.")
     except ValidationError:
         pass
 

@@ -14,12 +14,7 @@ from app.schemas.user import UserRead
 
 class PayrollSettingRead(BaseModel):
     id: int
-    minimum_wage_amount: Decimal
     deduction_config: list[dict]
-    basic_salary_multiplier: Decimal
-    basic_salary_step_multiplier: Decimal
-    basic_salary_steps: int
-    max_position_rank: int
     automatic_deduction_schedule: str
     created_at: datetime
     updated_at: datetime
@@ -272,12 +267,7 @@ class Mp2EnrollmentUpdateRequest(BaseModel):
 
 
 class PayrollSettingUpdateRequest(BaseModel):
-    minimum_wage_amount: Decimal | None = Field(default=None, ge=0)
     deduction_config: list[dict] | None = None
-    basic_salary_multiplier: Decimal | None = None
-    basic_salary_step_multiplier: Decimal | None = None
-    basic_salary_steps: int | None = Field(default=None, ge=1)
-    max_position_rank: int | None = Field(default=None, ge=1)
     automatic_deduction_schedule: str | None = Field(
         default=None,
         pattern="^(SECOND_CUTOFF_ONLY|SPLIT_BOTH_CUTOFFS)$",
@@ -288,7 +278,6 @@ class PositionRead(BaseModel):
     id: int
     title: str
     code: str
-    salary_grade: int
     is_active: bool
     departments: list[DepartmentRead] = Field(default_factory=list)
     created_at: datetime
@@ -300,7 +289,6 @@ class PositionRead(BaseModel):
 class PositionUpsertRequest(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     code: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9]+$")
-    salary_grade: int = Field(ge=1)
     department_ids: list[int] = Field(default_factory=list)
     is_active: bool = True
 
@@ -375,7 +363,6 @@ class PayslipVariableDeductionUpsertRequest(BaseModel):
 class PayslipRead(BaseModel):
     id: int
     user_id: UUID
-    rank: str | None = None
     salary: Decimal | None = None
     automatic_deduction_schedule: str | None = None
     period: str | None = None
@@ -400,7 +387,6 @@ class PayslipCreateRequest(BaseModel):
 
 
 class PayslipUpdateRequest(BaseModel):
-    rank: str | None = Field(default=None, max_length=500)
     salary: Decimal | None = Field(default=None, ge=0)
     released: bool | None = None
 

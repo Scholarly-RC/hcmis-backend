@@ -3,7 +3,6 @@ from __future__ import annotations
 from calendar import monthrange
 from collections import defaultdict
 from datetime import date
-import re
 from decimal import Decimal
 from uuid import UUID
 
@@ -37,7 +36,7 @@ from app.repositories.payroll import (
     ThirteenthMonthPayoutRepository,
 )
 from app.repositories.users import UserRepository
-from app.repositories.users import UserPositionAssignmentRepository
+from app.repositories.users import UserSalaryAssignmentRepository
 from app.services.notifications import create_notification_if_possible
 from app.schemas.payroll import (
     FixedCompensationUpsertRequest,
@@ -101,22 +100,13 @@ def _to_decimal(value: Decimal | int | str | float | None) -> Decimal:
     return Decimal(str(value))
 
 
-def _month_period_pattern() -> re.Pattern[str]:
-    return re.compile(r"^(?P<position_code>[A-Z0-9]+)-(?P<rank>\d+)(?: - STEP (?P<step>\d+))?$")
-
-
 async def get_settings(session: AsyncSession) -> PayrollSetting:
     repository = PayrollSettingRepository(session)
     settings = await repository.get_first()
     if settings is None:
         settings = PayrollSetting(
             id=1,
-            minimum_wage_amount=Decimal("0.00"),
             deduction_config=DEFAULT_DEDUCTION_CONFIG,
-            basic_salary_multiplier=Decimal("1.0000"),
-            basic_salary_step_multiplier=Decimal("1.0000"),
-            basic_salary_steps=10,
-            max_position_rank=10,
             automatic_deduction_schedule="SECOND_CUTOFF_ONLY",
         )
         return await repository.create(settings)
@@ -232,27 +222,6 @@ def list_deduction_config() -> list[dict]:
     return [item.copy() for item in DEFAULT_DEDUCTION_CONFIG]
 
 
-def _salary_grade_amount(settings: PayrollSetting, grade: int) -> Decimal:
-    if grade < 1:
-        raise ConflictError("Salary grade must be greater than zero.")
-    base = _to_decimal(settings.minimum_wage_amount)
-    multiplier = _to_decimal(settings.basic_salary_multiplier)
-    value = base
-    for _ in range(grade - 1):
-        value *= multiplier
-    return value
-
-
-def _salary_steps(settings: PayrollSetting, base_salary: Decimal) -> list[dict[str, Decimal]]:
-    steps: list[dict[str, Decimal]] = []
-    current = base_salary
-    step_multiplier = _to_decimal(settings.basic_salary_step_multiplier)
-    for step in range(1, settings.basic_salary_steps + 1):
-        current = current * step_multiplier
-        steps.append({f"STEP {step}": current.quantize(Decimal("0.01"))})
-    return steps
-
-
 def _semi_monthly_base_from_monthly(monthly_salary: Decimal) -> Decimal:
     daily_rate = monthly_salary / MONTHLY_TO_DAILY_DIVISOR
     return (daily_rate * SEMI_MONTHLY_DAYS).quantize(Decimal("0.01"))
@@ -282,7 +251,6 @@ async def create_position(session: AsyncSession, payload: PositionUpsertRequest)
     position = Position(
         title=payload.title,
         code=payload.code.upper(),
-        salary_grade=payload.salary_grade,
         is_active=payload.is_active,
     )
     created = await repository.create(position)
@@ -308,7 +276,6 @@ async def update_position(
         raise ConflictError("Position code already exists.")
     position.title = payload.title
     position.code = payload.code.upper()
-    position.salary_grade = payload.salary_grade
     position.is_active = payload.is_active
     position.departments = await _resolve_departments(session, payload.department_ids)
     saved = await repository.save(position)
@@ -407,12 +374,6 @@ async def get_payslips(
     )
 
 
-def _format_rank_display(position_code: str, rank_level: int, step_number: int | None) -> str:
-    if step_number is None:
-        return f"{position_code}-{rank_level}"
-    return f"{position_code}-{rank_level} - STEP {step_number}"
-
-
 async def _current_salary_for_user(
     session: AsyncSession,
     user: User,
@@ -420,27 +381,17 @@ async def _current_salary_for_user(
     month: int | None = None,
     year: int | None = None,
     period: str | None = None,
-) -> tuple[str | None, Decimal | None]:
-    if user.department_id is None:
-        return None, None
-    settings = await get_settings(session)
+) -> Decimal | None:
     effective_date = resolve_mp2_effective_date(month, year, period)
-    assignment = await UserPositionAssignmentRepository(session).get_active_for_user_on(
+    assignment = await UserSalaryAssignmentRepository(session).get_active_for_user_on(
         user.id,
         effective_date,
     )
     if assignment is not None:
-        position = assignment.position
-        grade = position.salary_grade
-        base_salary = _salary_grade_amount(settings, grade)
-        if assignment.step_number is not None:
-            for _ in range(assignment.step_number):
-                base_salary *= _to_decimal(settings.basic_salary_step_multiplier)
-        return (
-            _format_rank_display(position.code, assignment.rank_level, assignment.step_number),
-            base_salary.quantize(Decimal("0.01")),
-        )
-    raise ConflictError("No active user position assignment found for the payslip effective date.")
+        return _to_decimal(assignment.monthly_salary).quantize(Decimal("0.01"))
+    if user.monthly_salary is None:
+        return None
+    return _to_decimal(user.monthly_salary).quantize(Decimal("0.01"))
 
 
 async def _mp2_deduction_for_user(
@@ -466,7 +417,27 @@ async def get_or_create_payslip(
     )
     if payslip is None:
         settings = await get_settings(session)
-        rank, salary = await _current_salary_for_user(
+        automatic_deduction_schedule = settings.automatic_deduction_schedule
+        if payload.period == "2ND":
+            existing_cutoffs = await repository.list(
+                user_id=payload.user_id,
+                month=payload.month,
+                year=payload.year,
+            )
+            first_cutoff = next(
+                (
+                    item
+                    for item in existing_cutoffs
+                    if item.period == "1ST" and item.released
+                ),
+                None,
+            )
+            if (
+                first_cutoff is not None
+                and first_cutoff.automatic_deduction_schedule
+            ):
+                automatic_deduction_schedule = first_cutoff.automatic_deduction_schedule
+        salary = await _current_salary_for_user(
             session,
             user,
             month=payload.month,
@@ -478,23 +449,19 @@ async def get_or_create_payslip(
             month=payload.month,
             year=payload.year,
             period=payload.period,
-            rank=rank,
             salary=salary,
-            automatic_deduction_schedule=settings.automatic_deduction_schedule,
+            automatic_deduction_schedule=automatic_deduction_schedule,
         )
         payslip = await repository.create(payslip)
     elif not payslip.released:
-        settings = await get_settings(session)
-        rank, salary = await _current_salary_for_user(
+        salary = await _current_salary_for_user(
             session,
             user,
             month=payload.month,
             year=payload.year,
             period=payload.period,
         )
-        payslip.rank = rank
         payslip.salary = salary
-        payslip.automatic_deduction_schedule = settings.automatic_deduction_schedule
         payslip = await repository.save(payslip)
     return payslip
 
@@ -507,8 +474,6 @@ async def update_payslip(
     if payslip is None:
         raise NotFoundError("Payslip not found.")
     was_released = payslip.released
-    if payload.rank is not None:
-        payslip.rank = payload.rank
     if payload.salary is not None:
         payslip.salary = payload.salary
     if payload.released is not None:

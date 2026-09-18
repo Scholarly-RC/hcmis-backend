@@ -18,7 +18,7 @@ from app.models.payroll import (
     ThirteenthMonthAdjustment,
     ThirteenthMonthPayout,
 )
-from app.models.user import User, UserPositionAssignment
+from app.models.user import User, UserSalaryAssignment
 from app.schemas.payroll import (
     Mp2EnrollmentCreateRequest,
     PositionUpsertRequest,
@@ -264,8 +264,8 @@ class FakePayslipVariableDeductionRepository(FakePayslipVariableCompensationRepo
     pass
 
 
-class FakeUserPositionAssignmentRepository:
-    items: dict[int, UserPositionAssignment] = {}
+class FakeUserSalaryAssignmentRepository:
+    items: dict[int, UserSalaryAssignment] = {}
     next_id = 1
 
     def __init__(self, session):
@@ -360,8 +360,8 @@ def _reset():
     FakePayslipVariableCompensationRepository.next_id = 1
     FakePayslipVariableDeductionRepository.items = {}
     FakePayslipVariableDeductionRepository.next_id = 1
-    FakeUserPositionAssignmentRepository.items = {}
-    FakeUserPositionAssignmentRepository.next_id = 1
+    FakeUserSalaryAssignmentRepository.items = {}
+    FakeUserSalaryAssignmentRepository.next_id = 1
     FakeThirteenthMonthPayoutRepository.items = {}
     FakeThirteenthMonthPayoutRepository.next_id = 1
     FakeThirteenthMonthAdjustmentRepository.items = {}
@@ -373,7 +373,7 @@ def _reset():
 def _seed():
     dept = Department(id=1, name="Operations", code="OPS", is_active=True, workweek=[])
     FakeDepartmentRepository.departments[1] = dept
-    position = Position(id=1, title="Operations Staff", code="OPS", salary_grade=1, is_active=True)
+    position = Position(id=1, title="Operations Staff", code="OPS", is_active=True)
     position.departments = [dept]
     FakePositionRepository.positions[1] = position
     user = User(
@@ -382,7 +382,8 @@ def _seed():
         password_hash="hashed",
         first_name="Employee",
         last_name="One",
-        rank="OPS-1",
+        position_id=1,
+        monthly_salary=Decimal("1000.00"),
         department_id=1,
         can_modify_shift=False,
         is_active=True,
@@ -395,12 +396,7 @@ def _seed():
 
     FakePayrollSettingRepository.setting = PayrollSetting(
         id=1,
-        minimum_wage_amount=Decimal("1000.00"),
         deduction_config=payroll_service.DEFAULT_DEDUCTION_CONFIG,
-        basic_salary_multiplier=Decimal("1.0000"),
-        basic_salary_step_multiplier=Decimal("1.0000"),
-        basic_salary_steps=2,
-        max_position_rank=3,
         automatic_deduction_schedule="SECOND_CUTOFF_ONLY",
         created_at=utc_now(),
         updated_at=utc_now(),
@@ -417,28 +413,24 @@ def test_payroll_settings_and_positions(monkeypatch):
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
 
     settings = anyio.run(payroll_service.get_settings, cast(AsyncSession, object()))
-    assert settings.minimum_wage_amount == Decimal("1000.00")
+    assert settings.automatic_deduction_schedule == "SECOND_CUTOFF_ONLY"
 
     updated = anyio.run(
         payroll_service.update_settings,
         cast(AsyncSession, object()),
-        PayrollSettingUpdateRequest(
-            minimum_wage_amount=Decimal("1200.00"),
-            automatic_deduction_schedule="SPLIT_BOTH_CUTOFFS",
-        ),
+        PayrollSettingUpdateRequest(automatic_deduction_schedule="SPLIT_BOTH_CUTOFFS"),
     )
-    assert updated.minimum_wage_amount == Decimal("1200.00")
     assert updated.automatic_deduction_schedule == "SPLIT_BOTH_CUTOFFS"
 
     position = anyio.run(
         payroll_service.create_position,
         cast(AsyncSession, object()),
-        PositionUpsertRequest(title="Staff", code="STAFF", salary_grade=1, department_ids=[1]),
+        PositionUpsertRequest(title="Staff", code="STAFF", department_ids=[1]),
     )
     assert position.code == "STAFF"
 
@@ -447,7 +439,6 @@ def test_position_request_normalizes_and_validates_code():
     payload = PositionUpsertRequest(
         title="  Staff  ",
         code=" ops1 ",
-        salary_grade=1,
         department_ids=[1],
     )
     assert payload.title == "Staff"
@@ -457,7 +448,6 @@ def test_position_request_normalizes_and_validates_code():
         PositionUpsertRequest(
             title="Staff",
             code="OPS-1",
-            salary_grade=1,
         )
         raise AssertionError("Expected validation error for invalid position code.")
     except ValidationError:
@@ -475,8 +465,8 @@ def test_payslip_calculation_and_variable_adjustments(monkeypatch):
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
     monkeypatch.setattr(payroll_service, "FixedCompensationRepository", FakeFixedCompensationRepository)
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
@@ -526,115 +516,56 @@ def test_payslip_calculation_and_variable_adjustments(monkeypatch):
     assert summary["net_salary"] is not None
 
 
-def test_payslip_salary_is_none_when_rank_exceeds_max_position_rank(monkeypatch):
+def test_payslip_salary_is_none_when_employee_salary_is_unconfigured(monkeypatch):
     _reset()
     _seed()
     monkeypatch.setattr(payroll_service, "PayrollSettingRepository", FakePayrollSettingRepository)
-    monkeypatch.setattr(payroll_service, "PositionRepository", FakePositionRepository)
     monkeypatch.setattr(payroll_service, "UserRepository", FakeUserRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
 
     user = FakeUserRepository.users[UUID(int=1)]
-    user.rank = "OPS-4"
+    user.monthly_salary = None
 
     payslip = anyio.run(
         payroll_service.get_or_create_payslip,
         cast(AsyncSession, object()),
         PayslipCreateRequest(user_id=UUID(int=1), month=1, year=2026, period="2ND"),
     )
-    assert payslip.rank == "OPS-4"
     assert payslip.salary is None
 
 
-def test_payslip_uses_effective_position_assignment_before_legacy_rank(monkeypatch):
+def test_payslip_uses_effective_salary_assignment_before_user_salary(monkeypatch):
     _reset()
     _seed()
     monkeypatch.setattr(payroll_service, "PayrollSettingRepository", FakePayrollSettingRepository)
-    monkeypatch.setattr(payroll_service, "PositionRepository", FakePositionRepository)
     monkeypatch.setattr(payroll_service, "UserRepository", FakeUserRepository)
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
 
     user = FakeUserRepository.users[UUID(int=1)]
-    user.rank = "OPS-99"
-    user.position_id = 1
-    user.rank_level = 2
-    user.step_number = 1
-    FakeUserPositionAssignmentRepository.items[1] = UserPositionAssignment(
+    FakeUserSalaryAssignmentRepository.items[1] = UserSalaryAssignment(
         id=1,
         user_id=user.id,
-        position_id=1,
-        rank_level=2,
-        step_number=1,
+        monthly_salary=Decimal("1250.00"),
         effective_from=date(2026, 1, 1),
         effective_to=None,
     )
-    FakeUserPositionAssignmentRepository.items[1].position = FakePositionRepository.positions[1]
 
     payslip = anyio.run(
         payroll_service.get_or_create_payslip,
         cast(AsyncSession, object()),
         PayslipCreateRequest(user_id=UUID(int=1), month=1, year=2026, period="2ND"),
     )
-    assert payslip.rank == "OPS-2 - STEP 1"
-    assert payslip.salary == Decimal("1000.00")
-
-
-def test_rank_level_increases_salary_grade_from_position_start(monkeypatch):
-    _reset()
-    _seed()
-    monkeypatch.setattr(payroll_service, "PayrollSettingRepository", FakePayrollSettingRepository)
-    monkeypatch.setattr(payroll_service, "PositionRepository", FakePositionRepository)
-    monkeypatch.setattr(payroll_service, "UserRepository", FakeUserRepository)
-    monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
-    monkeypatch.setattr(
-        payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
-    )
-
-    settings = FakePayrollSettingRepository.setting
-    assert settings is not None
-    settings.minimum_wage_amount = Decimal("10520.00")
-    settings.basic_salary_multiplier = Decimal("1.2000")
-    settings.basic_salary_step_multiplier = Decimal("1.0300")
-
-    position = FakePositionRepository.positions[1]
-    position.salary_grade = 2
-
-    user = FakeUserRepository.users[UUID(int=1)]
-    user.rank = "OPS-5"
-    user.position_id = 1
-    user.rank_level = 5
-    user.step_number = None
-
-    FakeUserPositionAssignmentRepository.items[1] = UserPositionAssignment(
-        id=1,
-        user_id=user.id,
-        position_id=1,
-        rank_level=5,
-        step_number=None,
-        effective_from=date(2026, 1, 1),
-        effective_to=None,
-    )
-    FakeUserPositionAssignmentRepository.items[1].position = position
-
-    payslip = anyio.run(
-        payroll_service.get_or_create_payslip,
-        cast(AsyncSession, object()),
-        PayslipCreateRequest(user_id=UUID(int=1), month=1, year=2026, period="2ND"),
-    )
-    assert payslip.rank == "OPS-5"
-    assert payslip.salary == Decimal("26177.13")
+    assert payslip.salary == Decimal("1250.00")
 
 
 def test_mp2_enrollment_and_summary_deduction(monkeypatch):
@@ -647,8 +578,8 @@ def test_mp2_enrollment_and_summary_deduction(monkeypatch):
     monkeypatch.setattr(payroll_service, "UserRepository", FakeUserRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
     monkeypatch.setattr(payroll_service, "FixedCompensationRepository", FakeFixedCompensationRepository)
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
@@ -764,8 +695,8 @@ def test_new_payslip_snapshots_deduction_schedule(monkeypatch):
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
 
     settings = FakePayrollSettingRepository.setting
@@ -790,8 +721,8 @@ def test_existing_payslip_keeps_snapshotted_deduction_schedule(monkeypatch):
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
 
     settings = FakePayrollSettingRepository.setting
@@ -825,8 +756,8 @@ def test_second_cutoff_inherits_month_schedule_from_released_first_cutoff(monkey
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
 
     settings = FakePayrollSettingRepository.setting
@@ -862,8 +793,8 @@ def test_thirteenth_month_payout_flow(monkeypatch):
     monkeypatch.setattr(payroll_service, "PayslipRepository", FakePayslipRepository)
     monkeypatch.setattr(
         payroll_service,
-        "UserPositionAssignmentRepository",
-        FakeUserPositionAssignmentRepository,
+        "UserSalaryAssignmentRepository",
+        FakeUserSalaryAssignmentRepository,
     )
     monkeypatch.setattr(payroll_service, "ThirteenthMonthPayoutRepository", FakeThirteenthMonthPayoutRepository)
     monkeypatch.setattr(payroll_service, "ThirteenthMonthAdjustmentRepository", FakeThirteenthMonthAdjustmentRepository)

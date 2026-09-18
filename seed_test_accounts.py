@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import hash_password
 import app.db.base  # noqa: F401
 from app.core.security import hash_password
 from app.db.session import async_session_maker

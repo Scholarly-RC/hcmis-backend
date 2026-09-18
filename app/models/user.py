@@ -1,7 +1,20 @@
 from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    Uuid,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.time import utc_now
@@ -23,10 +36,18 @@ class User(Base):
             "level_1_approver_id IS NULL OR level_2_approver_id IS NULL OR level_1_approver_id <> level_2_approver_id",
             name="ck_users_approvers_distinct",
         ),
+        CheckConstraint(
+            "monthly_salary IS NULL OR monthly_salary >= 0",
+            name="ck_users_monthly_salary_nonnegative",
+        ),
+        UniqueConstraint("email", name="users_email_key"),
+        Index("ix_users_biometric_uid", "biometric_uid"),
+        Index("ix_users_department_id", "department_id"),
+        Index("ix_users_position_id", "position_id"),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4, index=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    email: Mapped[str] = mapped_column(String(255))
     username: Mapped[str | None] = mapped_column(String(100), unique=True, index=True, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -41,10 +62,8 @@ class User(Base):
     highest_education_program: Mapped[str | None] = mapped_column(String(255), nullable=True)
     civil_status: Mapped[str | None] = mapped_column(String(10), nullable=True)
     religion: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    rank: Mapped[str | None] = mapped_column(String(100), nullable=True)
     position_id: Mapped[int | None] = mapped_column(ForeignKey("positions.id"), nullable=True)
-    rank_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    step_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    monthly_salary: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     employee_number: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     biometric_uid: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
     role: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -155,6 +174,13 @@ class User(Base):
         foreign_keys="UserPositionAssignment.user_id",
         order_by="UserPositionAssignment.effective_from.desc()",
     )
+    salary_assignments = relationship(
+        "UserSalaryAssignment",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="UserSalaryAssignment.user_id",
+        order_by="UserSalaryAssignment.effective_from.desc()",
+    )
     employment_movements = relationship(
         "UserEmploymentMovement",
         back_populates="user",
@@ -184,19 +210,10 @@ class User(Base):
 
 class UserPositionAssignment(Base):
     __tablename__ = "user_position_assignments"
-    __table_args__ = (
-        CheckConstraint("rank_level >= 1", name="ck_user_position_assignments_rank_level_positive"),
-        CheckConstraint(
-            "step_number IS NULL OR step_number >= 1",
-            name="ck_user_position_assignments_step_number_positive",
-        ),
-    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     position_id: Mapped[int] = mapped_column(ForeignKey("positions.id"), nullable=False, index=True)
-    rank_level: Mapped[int] = mapped_column(Integer, nullable=False)
-    step_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     effective_from: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     effective_to: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     change_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -210,6 +227,32 @@ class UserPositionAssignment(Base):
 
     user = relationship("User", back_populates="position_assignments", foreign_keys=[user_id])
     position = relationship("Position")
+
+
+class UserSalaryAssignment(Base):
+    __tablename__ = "user_salary_assignments"
+    __table_args__ = (
+        CheckConstraint(
+            "monthly_salary >= 0",
+            name="ck_user_salary_assignments_monthly_salary_nonnegative",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    monthly_salary: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    change_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    changed_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    user = relationship("User", back_populates="salary_assignments", foreign_keys=[user_id])
 
 
 class UserEmploymentMovement(Base):
