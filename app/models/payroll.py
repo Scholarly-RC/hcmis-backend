@@ -46,18 +46,7 @@ class PayrollSetting(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    minimum_wage_amount: Mapped[Decimal] = mapped_column(
-        Numeric(12, 2), default=Decimal("0.00"), nullable=False
-    )
     deduction_config: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
-    basic_salary_multiplier: Mapped[Decimal] = mapped_column(
-        Numeric(8, 4), default=Decimal("1.0000"), nullable=False
-    )
-    basic_salary_step_multiplier: Mapped[Decimal] = mapped_column(
-        Numeric(8, 4), default=Decimal("1.0000"), nullable=False
-    )
-    basic_salary_steps: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
-    max_position_rank: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     automatic_deduction_schedule: Mapped[str] = mapped_column(
         String(32), default="SECOND_CUTOFF_ONLY", nullable=False
     )
@@ -96,11 +85,13 @@ class Mp2Enrollment(Base):
 
 class Position(Base):
     __tablename__ = "positions"
+    __table_args__ = (
+        UniqueConstraint("code", name="jobs_code_key"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    code: Mapped[str] = mapped_column(String(10), unique=True, index=True, nullable=False)
-    salary_grade: Mapped[int] = mapped_column(Integer, nullable=False)
+    code: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
@@ -151,7 +142,6 @@ class Payslip(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
-    rank: Mapped[str | None] = mapped_column(String(500), nullable=True)
     salary: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     automatic_deduction_schedule: Mapped[str | None] = mapped_column(String(32), nullable=True)
     period: Mapped[str | None] = mapped_column(String(3), nullable=True)

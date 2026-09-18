@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.department import Department
-from app.models.user import User, UserEmploymentMovement, UserPositionAssignment
+from app.models.user import (
+    User,
+    UserEmploymentMovement,
+    UserPositionAssignment,
+    UserSalaryAssignment,
+)
 
 
 class UserRepository:
@@ -259,6 +264,90 @@ class UserPositionAssignmentRepository:
         result = await self.session.execute(
             self._with_relationships(select(UserPositionAssignment)).where(
                 UserPositionAssignment.id == assignment.id
+            )
+        )
+        return result.scalar_one()
+
+
+class UserSalaryAssignmentRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    def _with_relationships(self, statement):
+        return statement.options(selectinload(UserSalaryAssignment.user))
+
+    async def list_for_user(self, user_id: UUID) -> list[UserSalaryAssignment]:
+        statement = self._with_relationships(
+            select(UserSalaryAssignment).where(UserSalaryAssignment.user_id == user_id)
+        ).order_by(
+            UserSalaryAssignment.effective_from.desc(),
+            UserSalaryAssignment.id.desc(),
+        )
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_active_for_user_on(
+        self,
+        user_id: UUID,
+        effective_date: date,
+    ) -> UserSalaryAssignment | None:
+        statement = (
+            self._with_relationships(select(UserSalaryAssignment))
+            .where(
+                and_(
+                    UserSalaryAssignment.user_id == user_id,
+                    UserSalaryAssignment.effective_from <= effective_date,
+                    or_(
+                        UserSalaryAssignment.effective_to.is_(None),
+                        UserSalaryAssignment.effective_to >= effective_date,
+                    ),
+                )
+            )
+            .order_by(
+                UserSalaryAssignment.effective_from.desc(),
+                UserSalaryAssignment.id.desc(),
+            )
+            .limit(1)
+        )
+        result = await self.session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def get_overlapping_assignments(
+        self,
+        user_id: UUID,
+        effective_from: date,
+        effective_to: date | None,
+        exclude_assignment_id: int | None = None,
+    ) -> list[UserSalaryAssignment]:
+        statement = select(UserSalaryAssignment).where(
+            UserSalaryAssignment.user_id == user_id,
+            or_(
+                UserSalaryAssignment.effective_to.is_(None),
+                UserSalaryAssignment.effective_to >= effective_from,
+            ),
+        )
+        if effective_to is not None:
+            statement = statement.where(UserSalaryAssignment.effective_from <= effective_to)
+        if exclude_assignment_id is not None:
+            statement = statement.where(UserSalaryAssignment.id != exclude_assignment_id)
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
+    async def create(self, assignment: UserSalaryAssignment) -> UserSalaryAssignment:
+        self.session.add(assignment)
+        await self.session.commit()
+        result = await self.session.execute(
+            self._with_relationships(select(UserSalaryAssignment)).where(
+                UserSalaryAssignment.id == assignment.id
+            )
+        )
+        return result.scalar_one()
+
+    async def save(self, assignment: UserSalaryAssignment) -> UserSalaryAssignment:
+        await self.session.commit()
+        result = await self.session.execute(
+            self._with_relationships(select(UserSalaryAssignment)).where(
+                UserSalaryAssignment.id == assignment.id
             )
         )
         return result.scalar_one()

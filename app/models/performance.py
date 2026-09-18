@@ -11,9 +11,12 @@ from app.models.base import Base
 
 class Questionnaire(Base):
     __tablename__ = "questionnaires"
+    __table_args__ = (
+        UniqueConstraint("code", name="questionnaires_code_key"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    code: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     content: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

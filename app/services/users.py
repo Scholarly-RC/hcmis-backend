@@ -1,6 +1,7 @@
 from uuid import UUID, uuid4
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,12 +10,13 @@ from sqlalchemy.exc import IntegrityError
 from app.core.exceptions import ConflictError
 from app.core.exceptions import NotFoundError
 from app.core.security import generate_temporary_password, hash_password
-from app.models.user import User, UserEmploymentMovement, UserPositionAssignment
+from app.models.user import User, UserEmploymentMovement, UserPositionAssignment, UserSalaryAssignment
 from app.repositories.departments import DepartmentRepository
 from app.repositories.payroll import PositionRepository
 from app.repositories.users import UserRepository
 from app.repositories.users import UserEmploymentMovementRepository
 from app.repositories.users import UserPositionAssignmentRepository
+from app.repositories.users import UserSalaryAssignmentRepository
 from app.schemas.user import UserCreateRequest
 from app.schemas.user import (
     UserBiometricUpdateRequest,
@@ -31,9 +33,7 @@ from app.core.time import local_today
 
 EMPLOYMENT_MOVEMENT_FIELDS = {
     "position_id",
-    "rank_level",
-    "step_number",
-    "rank",
+    "monthly_salary",
     "department_id",
     "employee_type",
     "employment_status",
@@ -51,20 +51,6 @@ def _normalize_username(value: str | None) -> str | None:
     return normalized
 
 
-def _normalize_rank_components(
-    position_id: int | None,
-    rank_level: int | None,
-    step_number: int | None,
-) -> tuple[int | None, int | None, int | None]:
-    if position_id is None and rank_level is None and step_number is None:
-        return None, None, None
-    if position_id is None or rank_level is None:
-        raise ConflictError("Position and rank level are required together.")
-    if step_number is not None and step_number < 1:
-        raise ConflictError("Step number must be at least 1.")
-    return position_id, rank_level, step_number
-
-
 def _default_assignment_effective_from(
     assignment_effective_from: date | None,
     date_of_hiring: date | None,
@@ -76,39 +62,16 @@ def _default_assignment_effective_from(
     return local_today()
 
 
-async def _validate_position_assignment(
+async def _validate_position(
     session: AsyncSession,
     position_id: int | None,
-    rank_level: int | None,
-    step_number: int | None,
-) -> tuple[int | None, int | None, int | None]:
-    position_id, rank_level, step_number = _normalize_rank_components(
-        position_id,
-        rank_level,
-        step_number,
-    )
+) -> int | None:
     if position_id is None:
-        return None, None, None
-    position = await PositionRepository(session).get_by_id(position_id)
-    if position is None:
-        raise NotFoundError("Position not found.")
-    return position_id, rank_level, step_number
-
-
-async def _derive_rank_label(
-    session: AsyncSession,
-    position_id: int | None,
-    rank_level: int | None,
-    step_number: int | None,
-) -> str | None:
-    if position_id is None or rank_level is None:
         return None
     position = await PositionRepository(session).get_by_id(position_id)
     if position is None:
         raise NotFoundError("Position not found.")
-    if step_number is None:
-        return f"{position.code}-{rank_level}"
-    return f"{position.code}-{rank_level} - STEP {step_number}"
+    return position_id
 
 
 async def _validate_user_approver_assignments(
@@ -147,8 +110,6 @@ async def _upsert_current_position_assignment(
     user: User,
     *,
     position_id: int,
-    rank_level: int,
-    step_number: int | None,
     effective_from: date,
     change_reason: str | None,
     changed_by: UUID | None,
@@ -158,8 +119,6 @@ async def _upsert_current_position_assignment(
     if (
         active_assignment is not None
         and active_assignment.position_id == position_id
-        and active_assignment.rank_level == rank_level
-        and active_assignment.step_number == step_number
         and active_assignment.effective_from == effective_from
     ):
         return
@@ -178,8 +137,39 @@ async def _upsert_current_position_assignment(
         UserPositionAssignment(
             user_id=user.id,
             position_id=position_id,
-            rank_level=rank_level,
-            step_number=step_number,
+            effective_from=effective_from,
+            effective_to=None,
+            change_reason=change_reason,
+            changed_by=changed_by,
+        )
+    )
+
+
+async def _upsert_current_salary_assignment(
+    session: AsyncSession,
+    user: User,
+    *,
+    monthly_salary: Decimal | None,
+    effective_from: date,
+    change_reason: str | None,
+    changed_by: UUID | None,
+) -> None:
+    assignment_repository = UserSalaryAssignmentRepository(session)
+    overlapping = await assignment_repository.get_overlapping_assignments(
+        user.id,
+        effective_from,
+        None,
+    )
+    for assignment in overlapping:
+        if assignment.effective_to is None or assignment.effective_to >= effective_from:
+            assignment.effective_to = effective_from - timedelta(days=1)
+            await assignment_repository.save(assignment)
+    if monthly_salary is None:
+        return
+    await assignment_repository.create(
+        UserSalaryAssignment(
+            user_id=user.id,
+            monthly_salary=monthly_salary,
             effective_from=effective_from,
             effective_to=None,
             change_reason=change_reason,
@@ -254,12 +244,7 @@ async def create_user(
         level_2_approver_id=payload.level_2_approver_id,
     )
 
-    position_id, rank_level, step_number = await _validate_position_assignment(
-        session,
-        payload.position_id,
-        payload.rank_level,
-        payload.step_number,
-    )
+    position_id = await _validate_position(session, payload.position_id)
 
     password_hash = hash_password(payload.password)
     user = User(
@@ -274,10 +259,8 @@ async def create_user(
         highest_education_program=payload.highest_education_program,
         civil_status=payload.civil_status,
         religion=payload.religion,
-        rank=payload.rank,
         position_id=position_id,
-        rank_level=rank_level,
-        step_number=step_number,
+        monthly_salary=payload.monthly_salary,
         employee_number=payload.employee_number,
         biometric_uid=payload.biometric_uid,
         role=payload.role,
@@ -296,26 +279,33 @@ async def create_user(
         is_active=payload.is_active,
         is_superuser=payload.is_superuser,
     )
-    if position_id is not None and rank_level is not None:
-        user.rank = await _derive_rank_label(session, position_id, rank_level, step_number)
     try:
         created_user = await user_repository.create(user)
     except IntegrityError as exc:
         raise ConflictError("User already exists.") from exc
-    if position_id is not None and rank_level is not None:
+    effective_from = _default_assignment_effective_from(
+        payload.assignment_effective_from,
+        payload.date_of_hiring,
+    )
+    if position_id is not None:
         await _upsert_current_position_assignment(
             session,
             created_user,
             position_id=position_id,
-            rank_level=rank_level,
-            step_number=step_number,
-            effective_from=_default_assignment_effective_from(
-                payload.assignment_effective_from,
-                payload.date_of_hiring,
-            ),
+            effective_from=effective_from,
             change_reason=payload.assignment_change_reason,
             changed_by=actor_user_id,
         )
+    if payload.monthly_salary is not None:
+        await _upsert_current_salary_assignment(
+            session,
+            created_user,
+            monthly_salary=payload.monthly_salary,
+            effective_from=effective_from,
+            change_reason=payload.assignment_change_reason,
+            changed_by=actor_user_id,
+        )
+    if position_id is not None or payload.monthly_salary is not None:
         created_user = await user_repository.get_by_id(created_user.id) or created_user
     return created_user
 
@@ -366,14 +356,16 @@ async def update_user(
         else user.level_2_approver_id
     )
     position_id = data.pop("position_id", user.position_id) if "position_id" in data else user.position_id
-    rank_level = data.pop("rank_level", user.rank_level) if "rank_level" in data else user.rank_level
-    step_number = data.pop("step_number", user.step_number) if "step_number" in data else user.step_number
+    monthly_salary = (
+        data.pop("monthly_salary", user.monthly_salary)
+        if "monthly_salary" in data
+        else user.monthly_salary
+    )
     assignment_effective_from = data.pop("assignment_effective_from", None)
     assignment_change_reason = data.pop("assignment_change_reason", None)
     proposed_employment_values = {
         "position_id": position_id,
-        "rank_level": rank_level,
-        "step_number": step_number,
+        "monthly_salary": monthly_salary,
         "department_id": department_id if "department_id" in payload.model_fields_set else user.department_id,
         "employee_type": data.get("employee_type", user.employee_type),
         "employment_status": data.get("employment_status", user.employment_status),
@@ -404,12 +396,7 @@ async def update_user(
         level_2_approver_id=level_2_approver_id,
     )
 
-    position_id, rank_level, step_number = await _validate_position_assignment(
-        session,
-        position_id,
-        rank_level,
-        step_number,
-    )
+    position_id = await _validate_position(session, position_id)
 
     original_values = {
         field_name: getattr(user, field_name, None) for field_name in EMPLOYMENT_MOVEMENT_FIELDS
@@ -426,16 +413,10 @@ async def update_user(
     user.level_1_approver_id = level_1_approver_id
     user.level_2_approver_id = level_2_approver_id
 
-    assignment_changed = (
-        position_id != user.position_id
-        or rank_level != user.rank_level
-        or step_number != user.step_number
-    )
+    assignment_changed = position_id != user.position_id
+    salary_changed = monthly_salary != user.monthly_salary
     user.position_id = position_id
-    user.rank_level = rank_level
-    user.step_number = step_number
-    if position_id is not None and rank_level is not None:
-        user.rank = await _derive_rank_label(session, position_id, rank_level, step_number)
+    user.monthly_salary = monthly_salary
 
     saved_user = await user_repository.save(user)
     changed_fields = [
@@ -467,20 +448,29 @@ async def update_user(
             for field_name in sorted(changed_fields)
         ]
         await movement_repository.create_many(movements)
-    if position_id is not None and rank_level is not None and assignment_changed:
+    effective_from = _default_assignment_effective_from(
+        assignment_effective_from,
+        saved_user.date_of_hiring,
+    )
+    if position_id is not None and assignment_changed:
         await _upsert_current_position_assignment(
             session,
             saved_user,
             position_id=position_id,
-            rank_level=rank_level,
-            step_number=step_number,
-            effective_from=_default_assignment_effective_from(
-                assignment_effective_from,
-                saved_user.date_of_hiring,
-            ),
+            effective_from=effective_from,
             change_reason=assignment_change_reason,
             changed_by=actor_user_id,
         )
+    if salary_changed:
+        await _upsert_current_salary_assignment(
+            session,
+            saved_user,
+            monthly_salary=monthly_salary,
+            effective_from=effective_from,
+            change_reason=assignment_change_reason,
+            changed_by=actor_user_id,
+        )
+    if assignment_changed or salary_changed:
         saved_user = await user_repository.get_by_id(saved_user.id) or saved_user
     return saved_user
 

@@ -186,7 +186,6 @@ def _seed():
     payslip = Payslip(
         id=1,
         user_id=employee.id,
-        rank="OPS-1",
         salary=Decimal("1000.00"),
         period="2ND",
         released=True,

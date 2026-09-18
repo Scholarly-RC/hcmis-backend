@@ -86,6 +86,11 @@ def test_register_returns_created_user(monkeypatch):
     monkeypatch.setattr(auth_routes, "UserRepository", FakeUserRepository)
     monkeypatch.setattr(auth_routes, "hash_password", lambda password: "hashed")
 
+    async def fake_create_app_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(auth_routes, "create_app_log", fake_create_app_log)
+
     payload = {
         "email": "new.user@example.com",
         "username": "new.user",

@@ -22,6 +22,8 @@ from app.models.base import Base
 class LeaveTypePolicy(Base):
     __tablename__ = "leave_types"
     __table_args__ = (
+        UniqueConstraint("code", name="leave_types_code_key"),
+        UniqueConstraint("name", name="leave_types_name_key"),
         CheckConstraint("max_credits >= 0", name="ck_leave_types_max_credits_non_negative"),
         CheckConstraint(
             "credit_mode IN ('incremental', 'fixed')",
@@ -30,8 +32,8 @@ class LeaveTypePolicy(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4, index=True)
-    code: Mapped[str] = mapped_column(String(24), nullable=False, unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     max_credits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     credit_mode: Mapped[str] = mapped_column(String(20), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -80,7 +82,7 @@ class LeaveCredit(Base):
 class LeaveRequest(Base):
     __tablename__ = "leave_requests"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     leave_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     leave_type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)

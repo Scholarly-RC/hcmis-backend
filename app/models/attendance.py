@@ -9,12 +9,14 @@ from sqlalchemy import (
     DateTime,
     Column,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
     Text,
     Time,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -158,6 +160,21 @@ class Holiday(Base):
         CheckConstraint("day >= 1 AND day <= 31", name="ck_holidays_day_range"),
         CheckConstraint("month >= 1 AND month <= 12", name="ck_holidays_month_range"),
         CheckConstraint("year IS NULL OR year >= 1900", name="ck_holidays_year_range"),
+        Index(
+            "uq_holidays_recurring_effective_date",
+            "month",
+            "day",
+            unique=True,
+            postgresql_where=text("year IS NULL"),
+        ),
+        Index(
+            "uq_holidays_specific_effective_date",
+            "year",
+            "month",
+            "day",
+            unique=True,
+            postgresql_where=text("year IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -175,6 +192,9 @@ class Holiday(Base):
 
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
+    __table_args__ = (
+        UniqueConstraint("raw_event_id", name="uq_attendance_records_raw_event_id"),
+    )
 
     class Punch(str, PyEnum):
         TIME_IN = "IN"
@@ -183,7 +203,7 @@ class AttendanceRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     device_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
-    raw_event_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    raw_event_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     punch: Mapped[str] = mapped_column(String(6), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -198,9 +218,12 @@ class AttendanceRecord(Base):
 
 class DeletedAttendanceRecord(Base):
     __tablename__ = "deleted_attendance_records"
+    __table_args__ = (
+        UniqueConstraint("raw_event_id", name="uq_deleted_attendance_records_raw_event_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    raw_event_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    raw_event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     deleted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

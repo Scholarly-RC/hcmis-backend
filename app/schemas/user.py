@@ -1,5 +1,5 @@
 from datetime import date, datetime
-import re
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -13,9 +13,6 @@ from pydantic import model_validator
 from app.services.profile_photo_storage import get_profile_photo_read_url
 from app.schemas.department import DepartmentRead
 
-RANK_PATTERN = re.compile(
-    r"^(?P<position_code>[A-Z0-9]+)-(?P<rank>\d+)(?:\s*-\s*STEP\s*(?P<step>\d+))?$"
-)
 EMPLOYEE_TYPE_VALUES = {
     "RANK_AND_FILE",
     "SUPERVISOR",
@@ -27,27 +24,6 @@ EMPLOYMENT_STATUS_VALUES = {
     "PROVISIONARY",
     "REGULAR",
 }
-
-
-def normalize_rank(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip().upper()
-    if normalized == "":
-        return None
-    match = RANK_PATTERN.match(normalized)
-    if match is None:
-        raise ValueError("Rank must follow CODE-RANK or CODE-RANK - STEP N format.")
-    rank = int(match.group("rank"))
-    if rank < 1:
-        raise ValueError("Rank number must be at least 1.")
-    step = match.group("step")
-    if step is None:
-        return f"{match.group('position_code')}-{rank}"
-    step_number = int(step)
-    if step_number < 1:
-        raise ValueError("Step number must be at least 1.")
-    return f"{match.group('position_code')}-{rank} - STEP {step_number}"
 
 
 def normalize_employee_type(value: str | None) -> str | None:
@@ -88,10 +64,8 @@ class UserRead(BaseModel):
     highest_education_program: str | None = None
     civil_status: str | None = None
     religion: str | None = None
-    rank: str | None = None
     position_id: int | None = None
-    rank_level: int | None = None
-    step_number: int | None = None
+    monthly_salary: Decimal | None = Field(default=None, ge=0)
     employee_number: str | None = None
     biometric_uid: int | None = None
     role: str | None = None
@@ -159,10 +133,8 @@ class UserCreateRequest(BaseModel):
     highest_education_program: str | None = None
     civil_status: str | None = None
     religion: str | None = None
-    rank: str | None = None
     position_id: int | None = None
-    rank_level: int | None = None
-    step_number: int | None = None
+    monthly_salary: Decimal | None = Field(default=None, ge=0)
     assignment_effective_from: date | None = None
     assignment_change_reason: str | None = None
     employee_number: str | None = None
@@ -188,25 +160,6 @@ class UserCreateRequest(BaseModel):
     def validate_username_required(cls, value: str) -> str:
         if value.strip() == "":
             raise ValueError("Username is required.")
-        return value
-
-    @field_validator("rank", mode="before")
-    @classmethod
-    def normalize_rank_value(cls, value: str | None) -> str | None:
-        return normalize_rank(value)
-
-    @field_validator("rank_level")
-    @classmethod
-    def validate_rank_level(cls, value: int | None) -> int | None:
-        if value is not None and value < 1:
-            raise ValueError("Rank level must be at least 1.")
-        return value
-
-    @field_validator("step_number")
-    @classmethod
-    def validate_step_number(cls, value: int | None) -> int | None:
-        if value is not None and value < 1:
-            raise ValueError("Step number must be at least 1.")
         return value
 
     @field_validator("employee_type", mode="before")
@@ -240,10 +193,8 @@ class UserUpdateRequest(BaseModel):
     highest_education_program: str | None = None
     civil_status: str | None = None
     religion: str | None = None
-    rank: str | None = None
     position_id: int | None = None
-    rank_level: int | None = None
-    step_number: int | None = None
+    monthly_salary: Decimal | None = Field(default=None, ge=0)
     assignment_effective_from: date | None = None
     assignment_change_reason: str | None = None
     employee_number: str | None = None
@@ -263,25 +214,6 @@ class UserUpdateRequest(BaseModel):
     can_modify_shift: bool | None = None
     is_active: bool | None = None
     is_superuser: bool | None = None
-
-    @field_validator("rank", mode="before")
-    @classmethod
-    def normalize_rank_value(cls, value: str | None) -> str | None:
-        return normalize_rank(value)
-
-    @field_validator("rank_level")
-    @classmethod
-    def validate_rank_level(cls, value: int | None) -> int | None:
-        if value is not None and value < 1:
-            raise ValueError("Rank level must be at least 1.")
-        return value
-
-    @field_validator("step_number")
-    @classmethod
-    def validate_step_number(cls, value: int | None) -> int | None:
-        if value is not None and value < 1:
-            raise ValueError("Step number must be at least 1.")
-        return value
 
     @field_validator("employee_type", mode="before")
     @classmethod

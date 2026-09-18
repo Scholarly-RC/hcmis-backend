@@ -54,7 +54,6 @@ def _make_user():
         highest_education_program=None,
         civil_status=None,
         religion=None,
-        rank=None,
         employee_number=None,
         role=None,
         department_id=None,

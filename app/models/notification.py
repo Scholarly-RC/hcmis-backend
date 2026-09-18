@@ -11,9 +11,11 @@ from app.models.base import Base
 class Notification(Base):
     __tablename__ = "notifications"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     recipient_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
-    sender_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    sender_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     content: Mapped[str] = mapped_column(Text)
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
     read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

@@ -11,7 +11,7 @@ from app.models.base import Base
 class AppLog(Base):
     __tablename__ = "app_logs"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     details: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
