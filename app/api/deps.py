@@ -6,7 +6,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.capabilities import is_staff_user
+from app.core.capabilities import is_hr_user, is_staff_user
 from app.core.config import settings
 from app.core.security import decode_access_token
 from app.db.session import get_session
@@ -56,6 +56,15 @@ async def require_staff_user(current_user: User = Depends(get_current_user)) -> 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Not enough permissions.",
+    )
+
+
+async def require_hr_user(current_user: User = Depends(get_current_user)) -> User:
+    if is_hr_user(current_user):
+        return current_user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only HR users can access this report.",
     )
 
 

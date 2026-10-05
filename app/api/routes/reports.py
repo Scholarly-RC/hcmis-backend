@@ -1,10 +1,16 @@
 from datetime import date
+from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db_session, require_staff_user
+from app.api.deps import (
+    get_current_user,
+    get_db_session,
+    require_hr_user,
+    require_staff_user,
+)
 from app.models.user import User
 from app.services.reports import (
     get_age_demographics_report,
@@ -16,6 +22,7 @@ from app.services.reports import (
     get_employee_yearly_salary_summary_report,
     get_employees_per_department_report,
     get_gender_demographics_report,
+    get_payroll_summary_report,
     get_religion_report,
     list_report_catalog,
     get_resignation_report,
@@ -30,7 +37,7 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 async def read_report_catalog(
     current_user: User = Depends(get_current_user),
 ) -> list[dict]:
-    return await list_report_catalog(current_user)
+    return cast(list[dict], await list_report_catalog(current_user))
 
 
 @router.get("/attendance/daily-staffing")
@@ -59,6 +66,16 @@ async def read_yearly_salary_expense_report(
     current_user: User = Depends(require_staff_user),
 ) -> dict:
     return await get_yearly_salary_expense_report(session, selected_year)
+
+
+@router.get("/payroll/summary")
+async def read_payroll_summary_report(
+    selected_month: int = Query(ge=1, le=12),
+    selected_year: int = Query(ge=2000),
+    session: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(require_hr_user),
+) -> dict:
+    return await get_payroll_summary_report(session, selected_month, selected_year)
 
 
 @router.get("/payroll/employee-summary")

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
+from typing import TypedDict, cast
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.capabilities import is_staff_user
+from app.core.capabilities import is_hr_user, is_staff_user
 from app.core.exceptions import NotFoundError
 from app.models.leave import LeaveType
 from app.models.performance import Evaluation
@@ -16,6 +18,7 @@ from app.repositories.reports import ReportsRepository
 from app.schemas.department import DepartmentRead
 from app.schemas.user import UserRead
 from app.services.payroll import get_payslip_summary
+from app.services.payroll_engine import get_payslip_summary_v2
 
 MONTH_LABELS = [
     "January",
@@ -55,7 +58,19 @@ RELIGION_LABELS = {
     "COC": "Church of Christ",
 }
 
-REPORT_CATALOG = [
+
+class ReportCatalogEntry(TypedDict):
+    code: str
+    label: str
+
+
+class ReportCatalogModule(TypedDict):
+    code: str
+    label: str
+    reports: list[ReportCatalogEntry]
+
+
+REPORT_CATALOG: list[ReportCatalogModule] = [
     {
         "code": "ATTENDANCE",
         "label": "Attendance",
@@ -78,6 +93,7 @@ REPORT_CATALOG = [
         "label": "Payroll",
         "reports": [
             {"code": "YEARLY_SALARY_EXPENSE", "label": "Yearly Salary Expense"},
+            {"code": "PAYROLL_SUMMARY", "label": "Payroll Summary"},
             {
                 "code": "EMPLOYEE_YEARLY_SALARY_SUMMARY",
                 "label": "Employee Yearly Salary Summary",
@@ -152,9 +168,10 @@ def _evaluation_score(evaluation: Evaluation) -> float:
     return round(total / count, 2) if count else 0.0
 
 
-async def list_report_catalog(current_user: User) -> list[dict]:
+async def list_report_catalog(current_user: User) -> list[ReportCatalogModule]:
     is_hr = is_staff_user(current_user)
-    modules = []
+    has_payroll_summary_access = is_hr_user(current_user)
+    modules: list[ReportCatalogModule] = []
     for module in REPORT_CATALOG:
         if module["code"] == "USERS" and not is_hr:
             continue
@@ -164,6 +181,19 @@ async def list_report_catalog(current_user: User) -> list[dict]:
                     "code": module["code"],
                     "label": module["label"],
                     "reports": [],
+                }
+            )
+            continue
+        if module["code"] == "PAYROLL" and not has_payroll_summary_access:
+            modules.append(
+                {
+                    "code": module["code"],
+                    "label": module["label"],
+                    "reports": [
+                        report
+                        for report in module["reports"]
+                        if report["code"] != "PAYROLL_SUMMARY"
+                    ],
                 }
             )
             continue
@@ -268,6 +298,112 @@ async def get_yearly_salary_expense_report(session: AsyncSession, selected_year:
         "months": months,
         "total_amounts": totals,
         "total_expenses": float(total_expense.quantize(Decimal("0.01"))),
+    }
+
+
+def _summary_value(summary: object, key: str) -> Decimal:
+    if isinstance(summary, Mapping):
+        value = cast(Mapping[str, object], summary).get(key)
+    else:
+        value = getattr(summary, key, None)
+    if value is None:
+        return Decimal("0.00")
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def _empty_payroll_totals() -> dict[str, Decimal]:
+    return {
+        "gross_pay": Decimal("0.00"),
+        "total_deductions": Decimal("0.00"),
+        "net_salary": Decimal("0.00"),
+    }
+
+
+def _add_payroll_totals(target: dict[str, Decimal], source: dict[str, Decimal]) -> None:
+    for key in target:
+        target[key] += source[key]
+
+
+def _serialize_payroll_totals(values: dict[str, Decimal]) -> dict[str, float]:
+    return {
+        key: float(value.quantize(Decimal("0.01")))
+        for key, value in values.items()
+    }
+
+
+async def get_payroll_summary_report(
+    session: AsyncSession, selected_month: int, selected_year: int
+) -> dict:
+    report_repo = ReportsRepository(session)
+    payslips = await report_repo.list_payslips(
+        month=selected_month,
+        year=selected_year,
+        released=True,
+    )
+    rows_by_user: dict[UUID, dict] = {}
+    report_totals = {
+        "first_cutoff": _empty_payroll_totals(),
+        "second_cutoff": _empty_payroll_totals(),
+        "monthly_total": _empty_payroll_totals(),
+    }
+
+    for payslip in payslips:
+        cutoff_key = {
+            "1ST": "first_cutoff",
+            "2ND": "second_cutoff",
+        }.get(payslip.period or "")
+        if cutoff_key is None or payslip.user is None:
+            continue
+
+        summary = await get_payslip_summary_v2(session, payslip.id)
+        totals = {
+            "gross_pay": _summary_value(summary, "gross_pay"),
+            "total_deductions": _summary_value(summary, "total_deductions"),
+            "net_salary": _summary_value(summary, "net_salary"),
+        }
+        row = rows_by_user.setdefault(
+            payslip.user_id,
+            {
+                "user": _user_dict(payslip.user),
+                "first_cutoff": None,
+                "second_cutoff": None,
+                "monthly_total": _empty_payroll_totals(),
+            },
+        )
+        row[cutoff_key] = {
+            "payslip_id": payslip.id,
+            **_serialize_payroll_totals(totals),
+        }
+        _add_payroll_totals(row["monthly_total"], totals)
+        _add_payroll_totals(report_totals[cutoff_key], totals)
+        _add_payroll_totals(report_totals["monthly_total"], totals)
+
+    rows = sorted(
+        rows_by_user.values(),
+        key=lambda row: (
+            row["user"].get("last_name") or "",
+            row["user"].get("first_name") or "",
+        ),
+    )
+    serialized_rows = [
+        {
+            **row,
+            "monthly_total": _serialize_payroll_totals(row["monthly_total"]),
+        }
+        for row in rows
+    ]
+
+    return {
+        "selected_month": selected_month,
+        "selected_year": selected_year,
+        "employee_count": len(serialized_rows),
+        "rows": serialized_rows,
+        "totals": {
+            key: _serialize_payroll_totals(value)
+            for key, value in report_totals.items()
+        },
     }
 
 

@@ -14,6 +14,10 @@ async def _require_staff(user: User):
     return await api_deps.require_staff_user(current_user=user)
 
 
+async def _require_hr(user: User):
+    return await api_deps.require_hr_user(current_user=user)
+
+
 def _make_user(
     user_id: int,
     role: str | None,
@@ -62,6 +66,24 @@ def test_require_staff_user_allows_superuser():
     assert result.id == superuser.id
 
 
+def test_require_hr_user_denies_non_hr_superuser():
+    superuser = _make_user(9, "EMP", is_superuser=True)
+
+    with pytest.raises(HTTPException) as exc:
+        anyio.run(_require_hr, superuser)
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Only HR users can access this report."
+
+
+def test_require_hr_user_allows_hr_superuser():
+    hr_superuser = _make_user(10, "HR", is_superuser=True)
+
+    result = anyio.run(_require_hr, hr_superuser)
+
+    assert result.id == hr_superuser.id
+
+
 def test_capability_resolution_for_employee():
     employee = _make_user(4, "EMP")
 
@@ -80,6 +102,7 @@ def test_capability_resolution_for_hr():
     assert "access_hr_workspace" in capabilities
     assert "manage_hr_users" in capabilities
     assert "view_reports" in capabilities
+    assert "view_payroll_summary" in capabilities
 
 
 def test_capability_resolution_for_superuser():
@@ -90,6 +113,7 @@ def test_capability_resolution_for_superuser():
     assert "access_hr_workspace" in capabilities
     assert "manage_shift_templates" in capabilities
     assert "view_app_logs" in capabilities
+    assert "view_payroll_summary" not in capabilities
 
 
 def test_non_hr_cannot_modify_employee_type_or_employment_status():
