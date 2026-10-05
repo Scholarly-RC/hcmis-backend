@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for hcmis-backend-demo on 2026-06-07T18:18:22+08:00
+# fly.toml app configuration file for hcmis-backend
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'hcmis-backend-demo'
+app = 'hcmis-backend'
 primary_region = 'sin'
 
 [build]
