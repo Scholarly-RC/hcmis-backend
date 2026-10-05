@@ -2,6 +2,7 @@ from app.models.user import User
 
 
 CAP_ACCESS_HR_WORKSPACE = "access_hr_workspace"
+CAP_VIEW_PAYROLL_SUMMARY = "view_payroll_summary"
 
 
 def normalize_role(value: str | None) -> str:
@@ -9,7 +10,11 @@ def normalize_role(value: str | None) -> str:
 
 
 def is_staff_user(user: User) -> bool:
-    return bool(user.is_superuser or normalize_role(user.role) == "HR")
+    return bool(user.is_superuser or is_hr_user(user))
+
+
+def is_hr_user(user: User) -> bool:
+    return normalize_role(user.role) == "HR"
 
 
 def resolve_user_capabilities(user: User) -> list[str]:
@@ -41,6 +46,9 @@ def resolve_user_capabilities(user: User) -> list[str]:
                 "view_app_logs",
             }
         )
+
+    if is_hr_user(user):
+        capabilities.add(CAP_VIEW_PAYROLL_SUMMARY)
 
     if user.can_modify_shift:
         capabilities.add("manage_shift_templates")

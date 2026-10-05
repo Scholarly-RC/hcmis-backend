@@ -98,6 +98,7 @@ class ReportsRepository:
         user_id: UUID | None = None,
         year: int | None = None,
         released: bool | None = True,
+        month: int | None = None,
     ) -> list[Payslip]:
         statement = (
             select(Payslip)
@@ -110,6 +111,8 @@ class ReportsRepository:
         )
         if user_id is not None:
             statement = statement.where(Payslip.user_id == user_id)
+        if month is not None:
+            statement = statement.where(Payslip.month == month)
         if year is not None:
             statement = statement.where(Payslip.year == year)
         if released is not None:

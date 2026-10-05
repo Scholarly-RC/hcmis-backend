@@ -60,10 +60,12 @@ class FakeReportsRepository:
             items = [item for item in items if item.leave_date <= to_date]
         return sorted(items, key=lambda item: item.leave_date)
 
-    async def list_payslips(self, user_id=None, year=None, released=True):
+    async def list_payslips(self, user_id=None, year=None, released=True, month=None):
         items = list(self.payslips)
         if user_id is not None:
             items = [item for item in items if item.user_id == user_id]
+        if month is not None:
+            items = [item for item in items if item.month == month]
         if year is not None:
             items = [item for item in items if item.year == year]
         if released is not None:
@@ -258,6 +260,20 @@ def test_reports_catalog_and_daily_staffing(monkeypatch):
         FakeReportsRepository.users[UUID(int=1)],
     )
     assert any(module["code"] == "USERS" for module in catalog)
+    payroll_module = next(module for module in catalog if module["code"] == "PAYROLL")
+    assert any(report["code"] == "PAYROLL_SUMMARY" for report in payroll_module["reports"])
+
+    employee_catalog = anyio.run(
+        reports_service.list_report_catalog,
+        FakeReportsRepository.users[UUID(int=2)],
+    )
+    employee_payroll_module = next(
+        module for module in employee_catalog if module["code"] == "PAYROLL"
+    )
+    assert not any(
+        report["code"] == "PAYROLL_SUMMARY"
+        for report in employee_payroll_module["reports"]
+    )
 
     report = anyio.run(
         reports_service.get_daily_staffing_report,
@@ -296,6 +312,60 @@ def test_reports_financial_and_performance(monkeypatch):
     )
     assert performance["self_rating_values"] == [4.0, 0]
     assert performance["peer_rating_values"] == [3.0, 0]
+
+
+def test_payroll_summary_aggregates_released_cutoffs_and_partial_rows(monkeypatch):
+    _reset()
+    _seed()
+    employee = FakeReportsRepository.users[UUID(int=2)]
+    first_cutoff = Payslip(
+        id=2,
+        user_id=employee.id,
+        salary=Decimal("1000.00"),
+        period="1ST",
+        released=True,
+        month=3,
+        year=2026,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    first_cutoff.user = employee
+    draft_cutoff = Payslip(
+        id=3,
+        user_id=employee.id,
+        salary=Decimal("1000.00"),
+        period="1ST",
+        released=False,
+        month=3,
+        year=2026,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    draft_cutoff.user = employee
+    FakeReportsRepository.payslips.extend([first_cutoff, draft_cutoff])
+    monkeypatch.setattr(reports_service, "ReportsRepository", FakeReportsRepository)
+
+    async def _fake_payslip_summary(session, payslip_id):
+        summaries = {
+            1: {"gross_pay": Decimal("500.00"), "total_deductions": Decimal("25.00"), "net_salary": Decimal("475.00")},
+            2: {"gross_pay": Decimal("500.00"), "total_deductions": Decimal("20.00"), "net_salary": Decimal("480.00")},
+        }
+        return summaries[payslip_id]
+
+    monkeypatch.setattr(reports_service, "get_payslip_summary_v2", _fake_payslip_summary)
+
+    report = anyio.run(
+        reports_service.get_payroll_summary_report,
+        cast(AsyncSession, object()),
+        3,
+        2026,
+    )
+
+    assert report["employee_count"] == 1
+    assert report["rows"][0]["first_cutoff"]["net_salary"] == 480.0
+    assert report["rows"][0]["second_cutoff"]["net_salary"] == 475.0
+    assert report["rows"][0]["monthly_total"]["net_salary"] == 955.0
+    assert report["totals"]["monthly_total"]["total_deductions"] == 45.0
 
 
 def test_reports_user_and_leave_summaries(monkeypatch):

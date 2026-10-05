@@ -70,4 +70,5 @@ def test_core_routes_are_registered():
     assert "/chat/messages" in paths
     assert "/reports/catalog" in paths
     assert "/reports/payroll/yearly-expense" in paths
+    assert "/reports/payroll/summary" in paths
     assert "/reports/users/demographics/gender" in paths
