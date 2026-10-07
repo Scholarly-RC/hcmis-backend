@@ -38,6 +38,7 @@ from app.repositories.leave import LeaveRequestRepository
 from app.repositories.departments import DepartmentRepository
 from app.repositories.users import UserRepository
 from app.services.notifications import create_notification_if_possible
+from app.services.attendance_rules import evaluate_attendance_day
 from app.schemas.attendance import (
     AttendanceRecordRead,
     AttendanceRecordCreateRequest,
@@ -230,6 +231,7 @@ async def create_shift_template(
         end_time=payload.end_time,
         start_time_2=payload.start_time_2,
         end_time_2=payload.end_time_2,
+        late_grace_minutes=payload.late_grace_minutes,
         is_active=payload.is_active,
     )
     return await repository.create(shift)
@@ -1135,12 +1137,22 @@ async def get_attendance_summary(
 
     summary_days: list[AttendanceSummaryDayRead] = []
     for day in range(1, total_days + 1):
+        selected_date = date(year, month, day)
+        assignment = assignments_by_day.get(day)
+        leave_request = approved_leave_by_day.get(day)
+        evaluation = evaluate_attendance_day(
+            selected_date=selected_date,
+            shift=assignment.shift_template if assignment is not None else None,
+            records=records_by_day.get(day, []),
+            is_holiday=day in holidays_by_day,
+            approved_leave=leave_request,
+        )
         summary_days.append(
             AttendanceSummaryDayRead(
                 day=day,
-                day_name=day_name[date(year, month, day).weekday()],
-                shift=EmployeeShiftAssignmentRead.model_validate(assignments_by_day[day])
-                if day in assignments_by_day
+                day_name=day_name[selected_date.weekday()],
+                shift=EmployeeShiftAssignmentRead.model_validate(assignment)
+                if assignment is not None
                 else None,
                 attendance_records=[
                     AttendanceRecordRead.model_validate(record)
@@ -1152,13 +1164,21 @@ async def get_attendance_summary(
                 ],
                 overtime_approved=day in overtime_by_day,
                 approved_leave=AttendanceSummaryLeaveRead(
-                    id=approved_leave_by_day[day].id,
-                    leave_date=approved_leave_by_day[day].leave_date,
-                    leave_type=approved_leave_by_day[day].leave_type,
-                    info=approved_leave_by_day[day].info,
+                    id=leave_request.id,
+                    leave_date=leave_request.leave_date,
+                    leave_type=leave_request.leave_type,
+                    duration=getattr(leave_request, "duration", None) or "FULL_DAY",
+                    approval_type=getattr(leave_request, "approval_type", None),
+                    info=leave_request.info,
                 )
-                if day in approved_leave_by_day
+                if leave_request is not None
                 else None,
+                status=evaluation.status,
+                late_minutes=evaluation.late_minutes,
+                scheduled_minutes=evaluation.scheduled_minutes,
+                absence_units=evaluation.absence_units,
+                deduction_units=evaluation.deduction_units,
+                partial_record=evaluation.partial_record,
             )
         )
 

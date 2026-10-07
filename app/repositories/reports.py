@@ -2,7 +2,7 @@ from uuid import UUID
 
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -36,7 +36,12 @@ class ReportsRepository:
         if not include_superusers:
             statement = statement.where(User.is_superuser.is_(False))
         if as_of_date is not None:
-            statement = statement.where(User.date_of_hiring <= as_of_date)
+            statement = statement.where(
+                or_(
+                    User.date_of_hiring.is_(None),
+                    User.date_of_hiring <= as_of_date,
+                )
+            )
         statement = statement.order_by(User.first_name.asc(), User.last_name.asc())
         result = await self.session.execute(statement)
         return list(result.scalars().all())

@@ -186,10 +186,19 @@ class PayslipVariableCompensation(Base):
 
 class PayslipVariableDeduction(Base):
     __tablename__ = "payslip_variable_deductions"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('MANUAL', 'ATTENDANCE')",
+            name="ck_payslip_variable_deductions_source",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     payslip_id: Mapped[int] = mapped_column(ForeignKey("payslips.id"), index=True)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), default="MANUAL", nullable=False)
+    source_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    source_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     amount: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), default=Decimal("0.00"), nullable=False
     )

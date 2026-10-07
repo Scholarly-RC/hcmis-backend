@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from collections import Counter, defaultdict
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import TypedDict, cast
 from uuid import UUID
@@ -11,10 +12,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.capabilities import is_hr_user, is_staff_user
 from app.core.exceptions import NotFoundError
-from app.models.leave import LeaveType
+from app.models.leave import LeaveRequestStatus, LeaveType
 from app.models.performance import Evaluation
 from app.models.user import User
 from app.repositories.reports import ReportsRepository
+from app.repositories.attendance import (
+    AttendanceRecordRepository,
+    EmployeeShiftAssignmentRepository,
+    HolidayRepository,
+)
+from app.repositories.leave import LeaveRequestRepository
+from app.core.time import day_bounds_utc, to_local
+from app.services.attendance_rules import evaluate_attendance_day
 from app.schemas.department import DepartmentRead
 from app.schemas.user import UserRead
 from app.services.payroll import get_payslip_summary
@@ -76,6 +85,10 @@ REPORT_CATALOG: list[ReportCatalogModule] = [
         "label": "Attendance",
         "reports": [
             {"code": "DAILY_STAFFING_REPORT", "label": "Daily Staffing Report"},
+            {
+                "code": "ATTENDANCE_EXCEPTIONS_REPORT",
+                "label": "Attendance Exceptions Report",
+            },
         ],
     },
     {
@@ -240,6 +253,135 @@ async def get_daily_staffing_report(
         "department_labels": department_labels,
         "department_counts": department_counts,
         "schedules": schedules,
+    }
+
+
+async def get_attendance_exceptions_report(
+    session: AsyncSession,
+    from_date: date | str,
+    to_date: date | str,
+) -> dict:
+    from_date_value = _as_date(from_date)
+    to_date_value = _as_date(to_date)
+    if to_date_value < from_date_value:
+        from_date_value, to_date_value = to_date_value, from_date_value
+
+    report_repo = ReportsRepository(session)
+    users = await report_repo.list_users(as_of_date=to_date_value)
+    holidays = await HolidayRepository(session).list()
+    holiday_dates = {
+        date(year, holiday.month, holiday.day)
+        for holiday in holidays
+        for year in range(from_date_value.year, to_date_value.year + 1)
+        if holiday.day <= monthrange(year, holiday.month)[1]
+        and (holiday.year is None or holiday.year == year)
+        and from_date_value <= date(year, holiday.month, holiday.day) <= to_date_value
+    }
+    rows: list[dict] = []
+    totals = {
+        "total_exceptions": 0,
+        "absent_days": 0,
+        "late_days": 0,
+        "partial_days": 0,
+        "unpaid_leave_days": 0,
+        "total_late_minutes": 0,
+    }
+    total_deduction_units = Decimal("0.00")
+
+    for user in users:
+        start_utc = day_bounds_utc(from_date_value)[0]
+        end_utc = day_bounds_utc(to_date_value)[1]
+        records = await AttendanceRecordRepository(session).list_for_user_range(
+            user.id, start_utc, end_utc
+        )
+        records_by_date: dict[date, list] = {}
+        for record in records:
+            records_by_date.setdefault(to_local(record.timestamp).date(), []).append(record)
+        leaves = await LeaveRequestRepository(session).list(
+            user_id=user.id,
+            status=LeaveRequestStatus.APPROVED.value,
+        )
+        leaves_by_date = {
+            leave.leave_date: leave
+            for leave in leaves
+            if from_date_value <= leave.leave_date <= to_date_value
+        }
+        assignments: list = []
+        cursor = date(from_date_value.year, from_date_value.month, 1)
+        while cursor <= to_date_value:
+            assignments.extend(
+                await EmployeeShiftAssignmentRepository(session).list_for_user_month(
+                    user.id, cursor.year, cursor.month
+                )
+            )
+            if cursor.month == 12:
+                cursor = date(cursor.year + 1, 1, 1)
+            else:
+                cursor = date(cursor.year, cursor.month + 1, 1)
+        assignments_by_date = {
+            assignment.date: assignment
+            for assignment in assignments
+            if from_date_value <= assignment.date <= to_date_value
+        }
+
+        current = from_date_value
+        while current <= to_date_value:
+            assignment = assignments_by_date.get(current)
+            evaluation = evaluate_attendance_day(
+                selected_date=current,
+                shift=assignment.shift_template if assignment is not None else None,
+                records=records_by_date.get(current, []),
+                is_holiday=current in holiday_dates,
+                approved_leave=leaves_by_date.get(current),
+            )
+            if evaluation.status in {
+                "ABSENT",
+                "LATE",
+                "PARTIAL_RECORD",
+                "ON_UNPAID_LEAVE",
+            }:
+                rows.append(
+                    {
+                        "user": _user_dict(user),
+                        "date": current.isoformat(),
+                        "status": evaluation.status,
+                        "late_minutes": evaluation.late_minutes,
+                        "scheduled_minutes": evaluation.scheduled_minutes,
+                        "absence_units": float(evaluation.absence_units),
+                        "deduction_units": float(evaluation.deduction_units),
+                        "partial_record": evaluation.partial_record,
+                        "leave": (
+                            {
+                                "id": leaves_by_date[current].id,
+                                "leave_type": leaves_by_date[current].leave_type,
+                                "duration": getattr(leaves_by_date[current], "duration", None)
+                                or "FULL_DAY",
+                                "approval_type": getattr(leaves_by_date[current], "approval_type", None),
+                            }
+                            if current in leaves_by_date
+                            else None
+                        ),
+                    }
+                )
+                totals["total_exceptions"] += 1
+                totals["absent_days"] += evaluation.status == "ABSENT"
+                totals["late_days"] += evaluation.status == "LATE"
+                totals["partial_days"] += evaluation.status == "PARTIAL_RECORD"
+                totals["unpaid_leave_days"] += evaluation.status == "ON_UNPAID_LEAVE"
+                totals["total_late_minutes"] += evaluation.late_minutes
+                total_deduction_units += evaluation.deduction_units
+            current += timedelta(days=1)
+
+    return {
+        "from_date": from_date_value.isoformat(),
+        "to_date": to_date_value.isoformat(),
+        "rows": rows,
+        "totals": {
+            **totals,
+            "total_deduction_units": float(
+                total_deduction_units.quantize(Decimal("0.01"))
+            ),
+        },
     }
 
 

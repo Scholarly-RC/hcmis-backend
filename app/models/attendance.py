@@ -47,6 +47,12 @@ department_roster_day_assignments = Table(
 
 class ShiftTemplate(Base):
     __tablename__ = "shifts"
+    __table_args__ = (
+        CheckConstraint(
+            "late_grace_minutes >= 0 AND late_grace_minutes <= 240",
+            name="ck_shifts_late_grace_minutes",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     description: Mapped[str] = mapped_column(String(255), default="", nullable=False)
@@ -54,6 +60,7 @@ class ShiftTemplate(Base):
     end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     start_time_2: Mapped[time | None] = mapped_column(Time, nullable=True)
     end_time_2: Mapped[time | None] = mapped_column(Time, nullable=True)
+    late_grace_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False

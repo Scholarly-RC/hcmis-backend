@@ -16,6 +16,7 @@ from app.services.reports import (
     get_age_demographics_report,
     get_all_employees_report,
     get_daily_staffing_report,
+    get_attendance_exceptions_report,
     get_education_level_report,
     get_employee_leave_summary_report,
     get_employee_performance_summary,
@@ -47,6 +48,16 @@ async def read_daily_staffing_report(
     current_user: User = Depends(require_staff_user),
 ) -> dict:
     return await get_daily_staffing_report(session, selected_date)
+
+
+@router.get("/attendance/exceptions")
+async def read_attendance_exceptions_report(
+    from_date: date,
+    to_date: date,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(require_hr_user),
+) -> dict:
+    return await get_attendance_exceptions_report(session, from_date, to_date)
 
 
 @router.get("/performance/employee-summary")

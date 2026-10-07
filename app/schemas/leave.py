@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_validator
 
 from app.schemas.user import UserRead
 
@@ -33,14 +34,14 @@ class LeaveTypePolicyUpsertRequest(BaseModel):
 
 
 class LeaveCreditUpsertRequest(BaseModel):
-    credits: int = Field(ge=0)
+    credits: float = Field(ge=0)
 
 
 class LeaveCreditRead(BaseModel):
     user_id: UUID
     leave_type: str | None = None
     credits: float
-    used_credits: int
+    used_credits: float
     remaining_credits: float
     user: UserRead | None = None
     created_at: datetime | None = None
@@ -52,6 +53,7 @@ class LeaveCreditRead(BaseModel):
 class LeaveRequestCreateRequest(BaseModel):
     leave_date: date
     leave_type: str = Field(min_length=1, max_length=24)
+    duration: Literal["FULL_DAY", "FIRST_HALF", "SECOND_HALF"] = "FULL_DAY"
     info: str | None = None
 
 
@@ -76,6 +78,7 @@ class LeaveRequestRead(BaseModel):
     user_id: UUID
     leave_date: date
     leave_type: str
+    duration: Literal["FULL_DAY", "FIRST_HALF", "SECOND_HALF"] = "FULL_DAY"
     approval_type: Literal["PAID", "NON_PAID"] | None = None
     info: str | None = None
     first_approver_id: UUID | None = None
@@ -93,5 +96,10 @@ class LeaveRequestRead(BaseModel):
     approver_pool: list[LeaveRequestApproverRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("duration", mode="before")
+    @classmethod
+    def default_missing_duration(cls, value):
+        return "FULL_DAY" if value is None else value
 
     model_config = ConfigDict(from_attributes=True)

@@ -5,7 +5,9 @@ from datetime import date
 from typing import List
 from uuid import UUID
 
-from sqlalchemy import extract, func, or_, select
+from decimal import Decimal
+
+from sqlalchemy import case, extract, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -196,12 +198,23 @@ class LeaveRequestRepository:
         leave_type: str,
         approved_since: date | None = None,
         paid_only: bool = False,
-    ) -> dict[UUID, int]:
+    ) -> dict[UUID, Decimal]:
         if not user_ids:
             return {}
 
         statement = (
-            select(LeaveRequest.user_id, func.count(LeaveRequest.id))
+            select(
+                LeaveRequest.user_id,
+                func.sum(
+                    case(
+                        (
+                            LeaveRequest.duration.in_(("FIRST_HALF", "SECOND_HALF")),
+                            Decimal("0.50"),
+                        ),
+                        else_=Decimal("1.00"),
+                    )
+                ),
+            )
             .where(
                 LeaveRequest.user_id.in_(user_ids),
                 LeaveRequest.leave_type == leave_type,
@@ -220,10 +233,10 @@ class LeaveRequestRepository:
 
         statement = statement.group_by(LeaveRequest.user_id)
         result = await self.session.execute(statement)
-        counts: dict[UUID, int] = {}
+        counts: dict[UUID, Decimal] = {}
         for user_id, count in result.all():
             if user_id is not None:
-                counts[user_id] = int(count or 0)
+                counts[user_id] = Decimal(str(count or 0)).quantize(Decimal("0.01"))
         return counts
 
     async def create(self, leave_request: LeaveRequest) -> LeaveRequest:

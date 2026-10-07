@@ -24,6 +24,7 @@ from app.services.payroll import (
     get_settings,
     resolve_mp2_effective_date,
 )
+from app.services.attendance_payroll import sync_attendance_deductions
 
 
 PH_POLICY_KEY = "PH_STATUTORY"
@@ -315,6 +316,8 @@ async def compute_payslip_summary_v2(
     payslip = await PayslipRepository(session).get_by_id(payslip_id)
     if payslip is None:
         raise NotFoundError("Payslip not found.")
+    if not payslip.released and hasattr(session, "execute"):
+        payslip = await sync_attendance_deductions(session, payslip_id)
 
     resolved_policy_version_id = await _resolve_policy_version_id_for_payslip(
         session,
@@ -426,6 +429,10 @@ async def get_payslip_summary_v2(session: AsyncSession, payslip_id: int) -> Pays
         for compensation in fixed_compensations
     ]
     summary = await compute_payslip_summary_v2(session, payslip_id)
+    if not payslip.released and hasattr(session, "execute"):
+        refreshed = await PayslipRepository(session).get_by_id(payslip_id)
+        if refreshed is not None:
+            payslip = refreshed
     base_salary = _to_decimal(payslip.salary)
     mandatory = summary.mandatory_deductions
 
