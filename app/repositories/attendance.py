@@ -186,6 +186,24 @@ class EmployeeShiftAssignmentRepository:
         )
         return list(result.scalars().all())
 
+    async def list_for_user_year(
+        self, user_id: UUID, year: int
+    ) -> list[EmployeeShiftAssignment]:
+        result = await self.session.execute(
+            select(EmployeeShiftAssignment)
+            .options(
+                selectinload(EmployeeShiftAssignment.shift_template),
+                selectinload(EmployeeShiftAssignment.user).selectinload(User.department),
+            )
+            .where(
+                EmployeeShiftAssignment.user_id == user_id,
+                EmployeeShiftAssignment.date >= date(year, 1, 1),
+                EmployeeShiftAssignment.date <= date(year, 12, 31),
+            )
+            .order_by(EmployeeShiftAssignment.date)
+        )
+        return list(result.scalars().all())
+
     async def get_by_id(self, schedule_id: int) -> EmployeeShiftAssignment | None:
         result = await self.session.execute(
             select(EmployeeShiftAssignment)

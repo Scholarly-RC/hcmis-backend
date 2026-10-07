@@ -453,6 +453,11 @@ class ThirteenthMonthPayoutRead(BaseModel):
     id: int
     user_id: UUID
     year: int
+    annual_basic_salary: Decimal
+    annual_absence_deductions: Decimal
+    annual_late_deductions: Decimal
+    annual_undertime_deductions: Decimal
+    eligible_basic_salary: Decimal
     gross_amount: Decimal
     total_deductions: Decimal
     net_amount: Decimal

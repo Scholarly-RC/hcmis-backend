@@ -24,6 +24,7 @@ from app.models.payroll import (
 from app.models.department import Department
 from app.models.user import User
 from app.repositories.departments import DepartmentRepository
+from app.repositories.attendance import HolidayRepository
 from app.repositories.payroll import (
     FixedCompensationRepository,
     Mp2EnrollmentRepository,
@@ -38,6 +39,7 @@ from app.repositories.payroll import (
 from app.repositories.users import UserRepository
 from app.repositories.users import UserSalaryAssignmentRepository
 from app.services.notifications import create_notification_if_possible
+from app.services.thirteenth_month import calculate_thirteenth_month_attendance
 from app.schemas.payroll import (
     FixedCompensationUpsertRequest,
     FixedCompensationUsersRequest,
@@ -702,8 +704,7 @@ async def generate_thirteenth_month_payouts(
     payout_repository = ThirteenthMonthPayoutRepository(session)
     adjustment_repository = ThirteenthMonthAdjustmentRepository(session)
     users = await UserRepository(session).list(include_superusers=False)
-    # 13th month uses earned basic salary for the calendar year, not release state.
-    payslips = await PayslipRepository(session).list(year=payload.year)
+    payslips = await PayslipRepository(session).list(year=payload.year, released=True)
 
     selected_monthly_payslips: dict[tuple[UUID, int], Payslip] = {}
     for payslip in payslips:
@@ -718,16 +719,69 @@ async def generate_thirteenth_month_payouts(
     for payslip in selected_monthly_payslips.values():
         annual_basic_salary_by_user[payslip.user_id] += _to_decimal(payslip.salary)
 
+    existing_payouts = await payout_repository.list(year=payload.year)
+    payouts_by_user = {payout.user_id: payout for payout in existing_payouts}
+    holidays = await HolidayRepository(session).list(year=payload.year)
+    calculated_values: dict[UUID, tuple[Decimal, Decimal, Decimal, Decimal, Decimal, Decimal]] = {}
+    for user in users:
+        payout = payouts_by_user.get(user.id)
+        if payout is not None and payout.status == "RELEASED":
+            continue
+
+        monthly_salary_by_month = {
+            month: _to_decimal(payslip.salary)
+            for (user_id, month), payslip in selected_monthly_payslips.items()
+            if user_id == user.id
+        }
+        attendance_totals = await calculate_thirteenth_month_attendance(
+            session,
+            user,
+            payload.year,
+            monthly_salary_by_month,
+            holidays=holidays,
+        )
+        annual_basic_salary = _round_money(annual_basic_salary_by_user[user.id])
+        absence_deductions = _round_money(attendance_totals.absence_deductions)
+        late_deductions = _round_money(attendance_totals.late_deductions)
+        undertime_deductions = _round_money(attendance_totals.undertime_deductions)
+        total_attendance_deductions = (
+            absence_deductions + late_deductions + undertime_deductions
+        )
+        eligible_basic_salary = _round_money(
+            max(annual_basic_salary - total_attendance_deductions, Decimal("0.00"))
+        )
+        gross_amount = _round_money(eligible_basic_salary / Decimal("12"))
+        calculated_values[user.id] = (
+            annual_basic_salary,
+            absence_deductions,
+            late_deductions,
+            undertime_deductions,
+            eligible_basic_salary,
+            gross_amount,
+        )
+
     generated_ids: list[int] = []
     for user in users:
-        gross_amount = _round_money(annual_basic_salary_by_user[user.id] / Decimal("12"))
-        payout = await payout_repository.get_by_user_year(user.id, payload.year)
+        payout = payouts_by_user.get(user.id)
 
         if payout is None:
+            (
+                annual_basic_salary,
+                absence_deductions,
+                late_deductions,
+                undertime_deductions,
+                eligible_basic_salary,
+                gross_amount,
+            ) = calculated_values[user.id]
             payout = await payout_repository.create(
                 ThirteenthMonthPayout(
                     user_id=user.id,
                     year=payload.year,
+                    annual_basic_salary=annual_basic_salary,
+                    annual_absence_deductions=absence_deductions,
+                    annual_late_deductions=late_deductions,
+                    annual_undertime_deductions=undertime_deductions,
+                    eligible_basic_salary=eligible_basic_salary,
                     gross_amount=gross_amount,
                     total_deductions=Decimal("0.00"),
                     net_amount=gross_amount,
@@ -741,7 +795,20 @@ async def generate_thirteenth_month_payouts(
             generated_ids.append(payout.id)
             continue
 
+        (
+            annual_basic_salary,
+            absence_deductions,
+            late_deductions,
+            undertime_deductions,
+            eligible_basic_salary,
+            gross_amount,
+        ) = calculated_values[user.id]
         adjustments = await adjustment_repository.list_by_payout_id(payout.id)
+        payout.annual_basic_salary = annual_basic_salary
+        payout.annual_absence_deductions = absence_deductions
+        payout.annual_late_deductions = late_deductions
+        payout.annual_undertime_deductions = undertime_deductions
+        payout.eligible_basic_salary = eligible_basic_salary
         payout.gross_amount = gross_amount
         payout.total_deductions, payout.net_amount = _compute_payout_totals(
             gross_amount, adjustments
