@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum as PyEnum
 from uuid import UUID, uuid4
 
@@ -8,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -57,14 +59,20 @@ class LeaveRequestStatus(str, PyEnum):
     CANCELLED = "CANCELLED"
 
 
+class LeaveDuration(str, PyEnum):
+    FULL_DAY = "FULL_DAY"
+    FIRST_HALF = "FIRST_HALF"
+    SECOND_HALF = "SECOND_HALF"
+
+
 class LeaveCredit(Base):
     __tablename__ = "leave_credits"
 
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id"), primary_key=True, index=True
     )
-    credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    used_credits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    credits: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=0, nullable=False)
+    used_credits: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -75,17 +83,24 @@ class LeaveCredit(Base):
     user = relationship("User", back_populates="leave_credit")
 
     @property
-    def remaining_credits(self) -> int:
+    def remaining_credits(self) -> Decimal:
         return self.credits - self.used_credits
 
 
 class LeaveRequest(Base):
     __tablename__ = "leave_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "duration IN ('FULL_DAY', 'FIRST_HALF', 'SECOND_HALF')",
+            name="ck_leave_requests_duration",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     leave_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     leave_type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    duration: Mapped[str] = mapped_column(String(20), default="FULL_DAY", nullable=False)
     approval_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     info: Mapped[str | None] = mapped_column(Text, nullable=True)
     first_approver_id: Mapped[UUID | None] = mapped_column(

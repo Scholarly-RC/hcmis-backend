@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_validator
 from pydantic import model_validator
 
 from app.schemas.department import DepartmentRead
@@ -18,9 +19,15 @@ class ShiftTemplateRead(BaseModel):
     end_time: time | None = None
     start_time_2: time | None = None
     end_time_2: time | None = None
+    late_grace_minutes: int = Field(default=0, ge=0, le=240)
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("late_grace_minutes", mode="before")
+    @classmethod
+    def default_missing_grace(cls, value):
+        return 0 if value is None else value
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -53,6 +60,7 @@ class ShiftTemplateCreateRequest(BaseModel):
     end_time: time
     start_time_2: time | None = None
     end_time_2: time | None = None
+    late_grace_minutes: int = Field(default=0, ge=0, le=240)
     is_active: bool = True
 
 
@@ -62,6 +70,7 @@ class ShiftTemplateUpdateRequest(BaseModel):
     end_time: time | None = None
     start_time_2: time | None = None
     end_time_2: time | None = None
+    late_grace_minutes: int | None = Field(default=None, ge=0, le=240)
     is_active: bool | None = None
 
 
@@ -297,12 +306,20 @@ class AttendanceSummaryDayRead(BaseModel):
     holidays: list[HolidayRead] = Field(default_factory=list)
     overtime_approved: bool = False
     approved_leave: "AttendanceSummaryLeaveRead | None" = None
+    status: str = "NO_SHIFT"
+    late_minutes: int = 0
+    scheduled_minutes: int = 0
+    absence_units: float = 0.0
+    deduction_units: float = 0.0
+    partial_record: bool = False
 
 
 class AttendanceSummaryLeaveRead(BaseModel):
     id: int
     leave_date: date
     leave_type: str
+    duration: Literal["FULL_DAY", "FIRST_HALF", "SECOND_HALF"] = "FULL_DAY"
+    approval_type: Literal["PAID", "NON_PAID"] | None = None
     info: str | None = None
 
 

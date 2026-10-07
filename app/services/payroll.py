@@ -39,6 +39,7 @@ from app.repositories.payroll import (
 from app.repositories.users import UserRepository
 from app.repositories.users import UserSalaryAssignmentRepository
 from app.services.notifications import create_notification_if_possible
+from app.services.attendance_payroll import sync_attendance_deductions
 from app.services.thirteenth_month import calculate_thirteenth_month_attendance
 from app.schemas.payroll import (
     FixedCompensationUpsertRequest,
@@ -478,6 +479,10 @@ async def update_payslip(
     was_released = payslip.released
     if payload.salary is not None:
         payslip.salary = payload.salary
+    releasing = payload.released is True and not was_released
+    if releasing and hasattr(session, "execute"):
+        await repository.save(payslip)
+        payslip = await sync_attendance_deductions(session, payslip_id)
     if payload.released is not None:
         payslip.released = payload.released
         payslip.release_date = utc_now() if payload.released else None
@@ -500,6 +505,9 @@ async def toggle_payslip_release(session: AsyncSession, payslip_id: int) -> Pays
     payslip = await repository.get_by_id(payslip_id)
     if payslip is None:
         raise NotFoundError("Payslip not found.")
+    releasing = not payslip.released
+    if releasing and hasattr(session, "execute"):
+        payslip = await sync_attendance_deductions(session, payslip_id)
     payslip.released = not payslip.released
     payslip.release_date = utc_now() if payslip.released else None
     payslip = await repository.save(payslip)
@@ -557,6 +565,8 @@ async def get_payslip_summary(session: AsyncSession, payslip_id: int) -> dict:
     payslip = await repository.get_by_id(payslip_id)
     if payslip is None:
         raise NotFoundError("Payslip not found.")
+    if not payslip.released and hasattr(session, "execute"):
+        payslip = await sync_attendance_deductions(session, payslip_id)
     settings = await get_settings(session)
     fixed_compensations = await FixedCompensationRepository(session).list(
         month=payslip.month, year=payslip.year
@@ -631,7 +641,10 @@ async def add_payslip_variable_deduction(
     if payslip is None:
         raise NotFoundError("Payslip not found.")
     item = PayslipVariableDeduction(
-        payslip_id=payslip_id, name=payload.name.strip(), amount=payload.amount
+        payslip_id=payslip_id,
+        name=payload.name.strip(),
+        amount=payload.amount,
+        source="MANUAL",
     )
     return await repository.create(item)
 

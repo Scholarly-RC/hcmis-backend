@@ -652,6 +652,37 @@ class PayslipVariableDeductionRepository:
                 payslip_id=payslip_id,
                 name=item["name"],
                 amount=item["amount"],
+                source=item.get("source", "MANUAL"),
+                source_date=item.get("source_date"),
+                source_type=item.get("source_type"),
+            )
+            for item in items
+        ]
+        self.session.add_all(created_items)
+        await self.session.commit()
+        for item in created_items:
+            await self.session.refresh(item)
+        return created_items
+
+    async def replace_attendance_for_payslip(
+        self,
+        payslip_id: int,
+        items: list[dict[str, Any]],
+    ) -> list[PayslipVariableDeduction]:
+        await self.session.execute(
+            delete(PayslipVariableDeduction).where(
+                PayslipVariableDeduction.payslip_id == payslip_id,
+                PayslipVariableDeduction.source == "ATTENDANCE",
+            )
+        )
+        created_items = [
+            PayslipVariableDeduction(
+                payslip_id=payslip_id,
+                name=item["name"],
+                amount=item["amount"],
+                source="ATTENDANCE",
+                source_date=item.get("source_date"),
+                source_type=item.get("source_type"),
             )
             for item in items
         ]

@@ -348,9 +348,17 @@ class PayslipVariableDeductionRead(BaseModel):
     id: int
     payslip_id: int
     name: str
+    source: str = "MANUAL"
+    source_date: date | None = None
+    source_type: str | None = None
     amount: Decimal
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def default_missing_source(cls, value):
+        return "MANUAL" if value is None else value
 
     model_config = ConfigDict(from_attributes=True)
 

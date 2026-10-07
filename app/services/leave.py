@@ -1,6 +1,7 @@
 import re
 from calendar import monthrange
 from datetime import date
+from decimal import Decimal
 from typing import TypedDict
 from uuid import UUID
 
@@ -37,11 +38,15 @@ from app.schemas.leave import (
 MONTHLY_INCREMENTAL_CREDITS = 1.25
 
 
+def _leave_duration_units(duration: str | None) -> float:
+    return 0.5 if duration in {"FIRST_HALF", "SECOND_HALF"} else 1.0
+
+
 class LeaveCreditSnapshot(TypedDict):
     user_id: UUID
     leave_type: str
     credits: float
-    used_credits: int
+    used_credits: float
     remaining_credits: float
     user: User
     created_at: None
@@ -333,6 +338,7 @@ async def create_leave_request(
         user_id=current_user.id,
         leave_date=payload.leave_date,
         leave_type=payload.leave_type,
+        duration=payload.duration,
         info=payload.info,
         first_approver_id=first_approver_id,
         second_approver_id=second_approver_id,
@@ -438,7 +444,7 @@ async def review_leave_request(
                 leave_type=leave_request.leave_type,
             )
             remaining_credits = leave_credit["remaining_credits"]
-            if remaining_credits <= 0:
+            if remaining_credits < _leave_duration_units(leave_request.duration):
                 raise ConflictError("Insufficient leave credits for paid leave.")
 
     final_status = (
@@ -596,15 +602,16 @@ async def list_leave_credits(
                 approved_since=cycle_start,
                 paid_only=True,
             )
-        ).get(user.id, 0)
+            ).get(user.id, Decimal("0.00"))
+        used_credits_value = float(used_credits)
         credits = round(_calculate_total_credits(user, leave_type_policy, as_of), 2)
-        remaining_credits = round(max(credits - used_credits, 0), 2)
+        remaining_credits = round(max(credits - used_credits_value, 0), 2)
         snapshots.append(
             {
                 "user_id": user.id,
                 "leave_type": leave_type_policy.code,
                 "credits": credits,
-                "used_credits": used_credits,
+                "used_credits": used_credits_value,
                 "remaining_credits": remaining_credits,
                 "user": user,
                 "created_at": None,
@@ -633,7 +640,7 @@ async def get_my_leave_credit(
             paid_only=True,
         )
     )
-    used_credits = used_credits_by_user_id.get(user.id, 0)
+    used_credits = float(used_credits_by_user_id.get(user.id, Decimal("0.00")))
     credits = round(_calculate_total_credits(user, leave_type_policy, as_of), 2)
     remaining_credits = round(max(credits - used_credits, 0), 2)
 
@@ -659,7 +666,11 @@ async def set_leave_credit(
     repository = LeaveCreditRepository(session)
     leave_credit = await repository.get_by_user_id(user_id)
     if leave_credit is None:
-        leave_credit = LeaveCredit(user_id=user_id, credits=payload.credits, used_credits=0)
+        leave_credit = LeaveCredit(
+            user_id=user_id,
+            credits=Decimal(str(payload.credits)),
+            used_credits=0,
+        )
         leave_credit = await repository.create(leave_credit)
         await _notify_user(
             session,
@@ -670,7 +681,7 @@ async def set_leave_credit(
         )
         return leave_credit
 
-    leave_credit.credits = payload.credits
+    leave_credit.credits = Decimal(str(payload.credits))
     leave_credit = await repository.save(leave_credit)
     await _notify_user(
         session,
