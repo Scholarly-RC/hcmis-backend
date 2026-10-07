@@ -1,5 +1,5 @@
 import anyio
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from typing import cast
 from uuid import UUID
@@ -8,7 +8,10 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import utc_now
+from app.core.time import combine_local
+from app.models.attendance import AttendanceRecord, EmployeeShiftAssignment, Holiday, ShiftTemplate
 from app.models.department import Department
+from app.models.leave import LeaveRequest
 from app.models.payroll import (
     FixedCompensation,
     Mp2Enrollment,
@@ -18,6 +21,7 @@ from app.models.payroll import (
     ThirteenthMonthAdjustment,
     ThirteenthMonthPayout,
 )
+from app.models.special_requests import OfficialBusinessRequest
 from app.models.user import User, UserSalaryAssignment
 from app.schemas.payroll import (
     Mp2EnrollmentCreateRequest,
@@ -31,6 +35,10 @@ from app.schemas.payroll import (
 )
 from app.services import payroll_engine
 from app.services import payroll as payroll_service
+from app.services.thirteenth_month import (
+    ThirteenthMonthAttendanceTotals,
+    calculate_attendance_deductions,
+)
 
 
 class FakeDepartmentRepository:
@@ -344,6 +352,14 @@ class FakeThirteenthMonthAdjustmentRepository:
 
     async def delete(self, item):
         self.items.pop(item.id, None)
+
+
+class FakeHolidayRepository:
+    def __init__(self, session):
+        self.session = session
+
+    async def list(self, year=None):
+        return []
 
 
 def _reset():
@@ -798,6 +814,18 @@ def test_thirteenth_month_payout_flow(monkeypatch):
     )
     monkeypatch.setattr(payroll_service, "ThirteenthMonthPayoutRepository", FakeThirteenthMonthPayoutRepository)
     monkeypatch.setattr(payroll_service, "ThirteenthMonthAdjustmentRepository", FakeThirteenthMonthAdjustmentRepository)
+    monkeypatch.setattr(payroll_service, "HolidayRepository", FakeHolidayRepository)
+
+    async def fake_attendance_totals(*args, **kwargs):
+        return ThirteenthMonthAttendanceTotals(
+            absence_deductions=Decimal("1200.00"),
+        )
+
+    monkeypatch.setattr(
+        payroll_service,
+        "calculate_thirteenth_month_attendance",
+        fake_attendance_totals,
+    )
 
     payslip_repository = FakePayslipRepository(cast(AsyncSession, object()))
     for month in range(1, 13):
@@ -807,7 +835,7 @@ def test_thirteenth_month_payout_flow(monkeypatch):
             year=2026,
             period="2ND",
             salary=Decimal("12000.00"),
-            released=month % 2 == 0,
+            released=True,
         )
         anyio.run(payslip_repository.create, payslip)
 
@@ -818,8 +846,13 @@ def test_thirteenth_month_payout_flow(monkeypatch):
     )
     assert len(generated) == 1
     payout = generated[0]
-    assert payout.gross_amount == Decimal("12000.00")
-    assert payout.net_amount == Decimal("12000.00")
+    assert payout.annual_basic_salary == Decimal("144000.00")
+    assert payout.annual_absence_deductions == Decimal("1200.00")
+    assert payout.annual_late_deductions == Decimal("0.00")
+    assert payout.annual_undertime_deductions == Decimal("0.00")
+    assert payout.eligible_basic_salary == Decimal("142800.00")
+    assert payout.gross_amount == Decimal("11900.00")
+    assert payout.net_amount == Decimal("11900.00")
 
     adjusted = anyio.run(
         payroll_service.add_thirteenth_month_adjustment,
@@ -833,7 +866,7 @@ def test_thirteenth_month_payout_flow(monkeypatch):
         ),
     )
     assert adjusted.total_deductions == Decimal("500.00")
-    assert adjusted.net_amount == Decimal("11500.00")
+    assert adjusted.net_amount == Decimal("11400.00")
 
     released = anyio.run(
         payroll_service.release_thirteenth_month_payout,
@@ -842,3 +875,164 @@ def test_thirteenth_month_payout_flow(monkeypatch):
     )
     assert released.status == "RELEASED"
     assert released.released_at is not None
+
+
+def test_thirteenth_month_attendance_deductions_use_schedule_and_punches():
+    user = User(
+        id=UUID(int=1),
+        email="employee@example.com",
+        password_hash="hashed",
+        date_of_hiring=date(2026, 1, 1),
+        is_active=True,
+        is_superuser=False,
+    )
+    shift = ShiftTemplate(
+        id=1,
+        description="Day Shift",
+        start_time=time(9, 0),
+        end_time=time(18, 0),
+        is_active=True,
+    )
+    absent_assignment = EmployeeShiftAssignment(
+        id=1,
+        date=date(2026, 1, 5),
+        user_id=user.id,
+        shift_template_id=shift.id,
+        shift_template=shift,
+    )
+    late_assignment = EmployeeShiftAssignment(
+        id=2,
+        date=date(2026, 1, 6),
+        user_id=user.id,
+        shift_template_id=shift.id,
+        shift_template=shift,
+    )
+    records = [
+        AttendanceRecord(
+            user_id=user.id,
+            timestamp=combine_local(date(2026, 1, 6), time(9, 30)),
+            punch="IN",
+        ),
+        AttendanceRecord(
+            user_id=user.id,
+            timestamp=combine_local(date(2026, 1, 6), time(17, 0)),
+            punch="OUT",
+        ),
+    ]
+
+    totals = calculate_attendance_deductions(
+        user=user,
+        year=2026,
+        monthly_salary_by_month={1: Decimal("22000.00")},
+        assignments=[absent_assignment, late_assignment],
+        attendance_records=records,
+        holidays=[],
+        leave_requests=[],
+        official_business_requests=[],
+    )
+
+    assert totals.absence_deductions == Decimal("1000.00")
+    assert totals.late_deductions == Decimal("55.56")
+    assert totals.undertime_deductions == Decimal("111.11")
+
+
+def test_thirteenth_month_attendance_ignores_paid_leave_holidays_and_official_business():
+    user_id = UUID(int=1)
+    user = User(
+        id=user_id,
+        email="employee@example.com",
+        password_hash="hashed",
+        date_of_hiring=date(2026, 1, 1),
+        is_active=True,
+        is_superuser=False,
+    )
+    shift = ShiftTemplate(
+        id=1,
+        description="Day Shift",
+        start_time=time(9, 0),
+        end_time=time(18, 0),
+        is_active=True,
+    )
+    assignments = [
+        EmployeeShiftAssignment(
+            id=day,
+            date=date(2026, 1, day),
+            user_id=user_id,
+            shift_template_id=shift.id,
+            shift_template=shift,
+        )
+        for day in (5, 6, 7)
+    ]
+    leave_request = LeaveRequest(
+        user_id=user_id,
+        leave_date=date(2026, 1, 5),
+        leave_type="PA",
+        approval_type="PAID",
+        status="APPROVED",
+    )
+    official_business = OfficialBusinessRequest(
+        user_id=user_id,
+        approver_id=UUID(int=2),
+        date=date(2026, 1, 7),
+        status="APPROVED",
+    )
+
+    totals = calculate_attendance_deductions(
+        user=user,
+        year=2026,
+        monthly_salary_by_month={1: Decimal("22000.00")},
+        assignments=assignments,
+        attendance_records=[],
+        holidays=[Holiday(day=6, month=1, year=2026, name="Holiday")],
+        leave_requests=[leave_request],
+        official_business_requests=[official_business],
+    )
+
+    assert totals == ThirteenthMonthAttendanceTotals()
+
+
+def test_thirteenth_month_attendance_rejects_incomplete_punches():
+    user = User(
+        id=UUID(int=1),
+        email="employee@example.com",
+        password_hash="hashed",
+        date_of_hiring=date(2026, 1, 1),
+        is_active=True,
+        is_superuser=False,
+    )
+    shift = ShiftTemplate(
+        id=1,
+        description="Day Shift",
+        start_time=time(9, 0),
+        end_time=time(18, 0),
+        is_active=True,
+    )
+    assignment = EmployeeShiftAssignment(
+        id=1,
+        date=date(2026, 1, 5),
+        user_id=user.id,
+        shift_template_id=shift.id,
+        shift_template=shift,
+    )
+
+    try:
+        calculate_attendance_deductions(
+            user=user,
+            year=2026,
+            monthly_salary_by_month={1: Decimal("22000.00")},
+            assignments=[assignment],
+            attendance_records=[
+                AttendanceRecord(
+                    user_id=user.id,
+                    timestamp=combine_local(date(2026, 1, 5), time(9, 0)),
+                    punch="IN",
+                )
+            ],
+            holidays=[],
+            leave_requests=[],
+            official_business_requests=[],
+        )
+    except Exception as exc:
+        assert "incomplete attendance punches" in str(exc)
+    else:
+        raise AssertionError("Expected incomplete attendance punches to fail calculation.")
