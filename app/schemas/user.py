@@ -21,8 +21,11 @@ EMPLOYEE_TYPE_VALUES = {
 }
 EMPLOYMENT_STATUS_VALUES = {
     "CONTRACTUAL",
-    "PROVISIONARY",
+    "PROBATIONARY",
     "REGULAR",
+}
+LEGACY_EMPLOYMENT_STATUS_ALIASES = {
+    "PROVISIONARY": "PROBATIONARY",
 }
 
 
@@ -45,9 +48,10 @@ def normalize_employment_status(value: str | None) -> str | None:
     normalized = value.strip().upper()
     if normalized == "":
         return None
+    normalized = LEGACY_EMPLOYMENT_STATUS_ALIASES.get(normalized, normalized)
     if normalized not in EMPLOYMENT_STATUS_VALUES:
         raise ValueError(
-            "Employment status must be one of: CONTRACTUAL, PROVISIONARY, REGULAR."
+            "Employment status must be one of: CONTRACTUAL, PROBATIONARY, REGULAR."
         )
     return normalized
 
@@ -97,6 +101,11 @@ class UserRead(BaseModel):
         if value is None:
             return False
         return bool(value)
+
+    @field_validator("employment_status", mode="before")
+    @classmethod
+    def normalize_employment_status_value(cls, value: str | None) -> str | None:
+        return normalize_employment_status(value)
 
     @field_serializer("profile_picture_url")
     def serialize_profile_picture_url(self, value: str | None) -> str | None:
