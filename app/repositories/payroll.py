@@ -363,7 +363,7 @@ class Mp2EnrollmentRepository:
     async def list(self, status: str | None = None) -> List[Mp2Enrollment]:
         statement = (
             select(Mp2Enrollment)
-            .options(selectinload(Mp2Enrollment.user))
+            .options(selectinload(Mp2Enrollment.user).selectinload(User.department))
             .order_by(Mp2Enrollment.effective_from.desc(), Mp2Enrollment.id.desc())
         )
         if status is not None:
@@ -374,7 +374,7 @@ class Mp2EnrollmentRepository:
     async def get_by_id(self, enrollment_id: int) -> Mp2Enrollment | None:
         result = await self.session.execute(
             select(Mp2Enrollment)
-            .options(selectinload(Mp2Enrollment.user))
+            .options(selectinload(Mp2Enrollment.user).selectinload(User.department))
             .where(Mp2Enrollment.id == enrollment_id)
         )
         return result.scalar_one_or_none()
@@ -386,7 +386,7 @@ class Mp2EnrollmentRepository:
     ) -> Mp2Enrollment | None:
         result = await self.session.execute(
             select(Mp2Enrollment)
-            .options(selectinload(Mp2Enrollment.user))
+            .options(selectinload(Mp2Enrollment.user).selectinload(User.department))
             .where(
                 Mp2Enrollment.user_id == user_id,
                 Mp2Enrollment.status == "active",
