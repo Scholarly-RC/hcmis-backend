@@ -503,11 +503,14 @@ def test_user_update_request_accepts_direct_salary_and_rejects_negative_salary()
 def test_user_update_request_normalizes_employee_fields():
     payload = UserUpdateRequest(
         employee_type="manager",
-        employment_status="regular",
+        employment_status="probationary",
     )
 
     assert payload.employee_type == "MANAGER"
-    assert payload.employment_status == "REGULAR"
+    assert payload.employment_status == "PROBATIONARY"
+
+    legacy_payload = UserUpdateRequest(employment_status="provisionary")
+    assert legacy_payload.employment_status == "PROBATIONARY"
 
 
 def test_toggle_user_status_flips_active_flag(monkeypatch):
