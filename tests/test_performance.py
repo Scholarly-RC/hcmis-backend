@@ -178,8 +178,8 @@ class FakeEvaluationRepository:
         return None
 
     async def create(self, item: Evaluation):
-        item.id = self.next_id
-        self.next_id += 1
+        item.id = type(self).next_id
+        type(self).next_id += 1
         item.created_at = item.created_at or utc_now()
         item.updated_at = item.updated_at or utc_now()
         item.evaluator = FakeUserRepository.users[item.evaluator_id]
@@ -683,7 +683,6 @@ def test_evaluation_summary_and_reset(monkeypatch):
         evaluation.id,
         EvaluationUpdateRequest(positive_feedback="Good", improvement_suggestion="Keep going"),
         UUID(int=2),
-        False,
     )
     assert updated.positive_feedback == "Good"
 
@@ -692,7 +691,6 @@ def test_evaluation_summary_and_reset(monkeypatch):
         cast(AsyncSession, object()),
         evaluation.id,
         UUID(int=2),
-        False,
     )
     assert submitted.date_submitted is not None
 
@@ -1462,7 +1460,6 @@ def test_submit_requires_complete_peer_feedback(monkeypatch):
             cast(AsyncSession, object()),
             peer_evaluation.id,
             UUID(int=2),
-            False,
         )
         assert False, "Expected a ConflictError"
     except ConflictError:
@@ -1522,11 +1519,136 @@ def test_update_evaluation_denied_for_non_owner(monkeypatch):
             created.id,
             EvaluationUpdateRequest(positive_feedback="x"),
             UUID(int=1),
-            False,
         )
         assert False, "Expected a PermissionDeniedError"
     except PermissionDeniedError:
         assert True
+
+
+def test_staff_can_rate_only_assigned_evaluations(monkeypatch):
+    _reset()
+    _seed()
+    monkeypatch.setattr(performance_service, "QuestionnaireRepository", FakeQuestionnaireRepository)
+    monkeypatch.setattr(performance_service, "UserEvaluationRepository", FakeUserEvaluationRepository)
+    monkeypatch.setattr(performance_service, "EvaluationRepository", FakeEvaluationRepository)
+    monkeypatch.setattr(performance_service, "UserRepository", FakeUserRepository)
+
+    hr_user = User(
+        id=UUID(int=3),
+        email="hr@example.com",
+        password_hash="hashed",
+        first_name="HR",
+        last_name="Evaluator",
+        department_id=1,
+        role="HR",
+        is_active=True,
+        is_superuser=False,
+        can_modify_shift=False,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    hr_user.department = FakeUserRepository.users[UUID(int=1)].department
+    FakeUserRepository.users[UUID(int=3)] = hr_user
+
+    questionnaire = anyio.run(
+        performance_service.create_questionnaire,
+        cast(AsyncSession, object()),
+        QuestionnaireCreateRequest(
+            code="PE-HR",
+            title="Performance Evaluation",
+            content={
+                "questionnaire_content": [
+                    {
+                        "domain_number": "1",
+                        "questions": [{"indicator_number": "1", "rating": None}],
+                    }
+                ]
+            },
+        ),
+    )
+    session = cast(AsyncSession, object())
+    user_evaluation = anyio.run(
+        performance_service.create_user_evaluation,
+        session,
+        UserEvaluationCreateRequest(
+            evaluatee_id=UUID(int=1),
+            questionnaire_id=questionnaire.id,
+            quarter="FQ",
+            year=2026,
+        ),
+    )
+    self_evaluation = next(
+        item
+        for item in FakeEvaluationRepository.items.values()
+        if item.evaluator_id == UUID(int=1)
+    )
+
+    with pytest.raises(PermissionDeniedError):
+        anyio.run(
+            performance_service.create_evaluation,
+            session,
+            user_evaluation.id,
+            UUID(int=3),
+            EvaluationCreateRequest(),
+            True,
+        )
+
+    assigned_evaluation = anyio.run(
+        performance_service.assign_user_evaluation_evaluator,
+        session,
+        user_evaluation.id,
+        EvaluationAssignmentRequest(evaluator_id=UUID(int=3)),
+    )
+    anyio.run(
+        performance_service.toggle_user_evaluation_finalized,
+        session,
+        user_evaluation.id,
+    )
+    assert assigned_evaluation.evaluator_id == UUID(int=3)
+    assert self_evaluation.evaluator_id == UUID(int=1)
+    assert assigned_evaluation.id != self_evaluation.id
+
+    with pytest.raises(PermissionDeniedError):
+        anyio.run(
+            performance_service.update_evaluation,
+            session,
+            self_evaluation.id,
+            EvaluationUpdateRequest(positive_feedback="Not assigned"),
+            UUID(int=3),
+        )
+    with pytest.raises(PermissionDeniedError):
+        anyio.run(
+            performance_service.submit_evaluation,
+            session,
+            self_evaluation.id,
+            UUID(int=3),
+        )
+
+    updated = anyio.run(
+        performance_service.update_evaluation,
+        session,
+        assigned_evaluation.id,
+        EvaluationUpdateRequest(
+            content_data=[
+                {
+                    "domain_number": "1",
+                    "questions": [{"indicator_number": "1", "rating": 5}],
+                }
+            ],
+            positive_feedback="Strong collaboration.",
+            improvement_suggestion="Keep sharing context early.",
+        ),
+        UUID(int=3),
+    )
+    assert updated.content_data[0]["questions"][0]["rating"] == 5
+
+    submitted = anyio.run(
+        performance_service.submit_evaluation,
+        session,
+        assigned_evaluation.id,
+        UUID(int=3),
+    )
+    assert submitted.date_submitted is not None
 
 
 def test_non_staff_cannot_create_unassigned_evaluation(monkeypatch):

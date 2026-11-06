@@ -148,6 +148,11 @@ def _assert_can_manage_evaluation(item: Evaluation, current_user_id: UUID, is_st
         raise PermissionDeniedError("Only assigned evaluator can modify this evaluation.")
 
 
+def _assert_can_rate_evaluation(item: Evaluation, current_user_id: UUID) -> None:
+    if item.evaluator_id != current_user_id:
+        raise PermissionDeniedError("Only assigned evaluator can rate this evaluation.")
+
+
 def _assert_cycle_allows_editing(item: Evaluation, is_staff: bool) -> None:
     if is_staff:
         return
@@ -691,11 +696,18 @@ async def create_evaluation(
                 content_data=payload.content_data,
             ),
             current_user_id=current_user_id,
-            is_staff=is_staff,
         )
 
     if not is_staff:
         raise PermissionDeniedError("Evaluator is not assigned to this cycle.")
+    if evaluator_id == current_user_id:
+        raise PermissionDeniedError("Evaluator is not assigned to this cycle.")
+    if (
+        payload.content_data is not None
+        or payload.positive_feedback is not None
+        or payload.improvement_suggestion is not None
+    ):
+        raise PermissionDeniedError("Staff cannot rate for another evaluator.")
 
     questionnaire = user_evaluation.questionnaire
     item = Evaluation(
@@ -716,14 +728,13 @@ async def update_evaluation(
     evaluation_id: int,
     payload: EvaluationUpdateRequest,
     current_user_id: UUID,
-    is_staff: bool = False,
 ) -> Evaluation:
     repository = EvaluationRepository(session)
     item = await repository.get_by_id(evaluation_id)
     if item is None:
         raise NotFoundError("Evaluation not found.")
-    _assert_can_manage_evaluation(item, current_user_id=current_user_id, is_staff=is_staff)
-    _assert_cycle_allows_editing(item, is_staff=is_staff)
+    _assert_can_rate_evaluation(item, current_user_id=current_user_id)
+    _assert_cycle_allows_editing(item, is_staff=False)
     if payload.content_data is not None:
         item.content_data = payload.content_data
     if payload.positive_feedback is not None:
@@ -737,14 +748,13 @@ async def submit_evaluation(
     session: AsyncSession,
     evaluation_id: int,
     current_user_id: UUID,
-    is_staff: bool = False,
 ) -> Evaluation:
     repository = EvaluationRepository(session)
     item = await repository.get_by_id(evaluation_id)
     if item is None:
         raise NotFoundError("Evaluation not found.")
-    _assert_can_manage_evaluation(item, current_user_id=current_user_id, is_staff=is_staff)
-    _assert_cycle_allows_editing(item, is_staff=is_staff)
+    _assert_can_rate_evaluation(item, current_user_id=current_user_id)
+    _assert_cycle_allows_editing(item, is_staff=False)
     _ensure_evaluation_complete(item)
     item.date_submitted = utc_now()
     item = await repository.save(item)

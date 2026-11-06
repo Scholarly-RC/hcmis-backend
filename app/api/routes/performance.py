@@ -543,7 +543,6 @@ async def patch_evaluation(
         evaluation_id,
         payload,
         current_user_id=current_user.id,
-        is_staff=is_staff_user(current_user),
     )
 
 
@@ -557,7 +556,6 @@ async def submit_evaluation_route(
         session,
         evaluation_id,
         current_user_id=current_user.id,
-        is_staff=is_staff_user(current_user),
     )
 
 
