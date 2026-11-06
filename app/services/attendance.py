@@ -1176,8 +1176,8 @@ async def get_attendance_summary(
                 status=evaluation.status,
                 late_minutes=evaluation.late_minutes,
                 scheduled_minutes=evaluation.scheduled_minutes,
-                absence_units=evaluation.absence_units,
-                deduction_units=evaluation.deduction_units,
+                absence_units=float(evaluation.absence_units),
+                deduction_units=float(evaluation.deduction_units),
                 partial_record=evaluation.partial_record,
             )
         )

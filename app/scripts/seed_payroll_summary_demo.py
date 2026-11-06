@@ -4,6 +4,7 @@ import argparse
 import asyncio
 from datetime import date
 from decimal import Decimal
+from typing import TypedDict
 from urllib.parse import urlparse
 
 from sqlalchemy import select
@@ -47,7 +48,18 @@ from app.services.reports import get_payroll_summary_report
 POLICY_VERSION_LABEL = "PH-STATUTORY-ACTIVE-2025"
 POSITION_CODE = "PAYQA"
 ASSIGNMENT_EFFECTIVE_FROM = date(2025, 1, 1)
-EMPLOYEE_FIXTURES = (
+
+
+class EmployeeFixture(TypedDict):
+    email: str
+    salary: Decimal
+    first_compensation: Decimal
+    first_deduction: Decimal
+    second_compensation: Decimal
+    second_deduction: Decimal
+
+
+EMPLOYEE_FIXTURES: tuple[EmployeeFixture, ...] = (
     {
         "email": "employee@example.com",
         "salary": Decimal("50000.00"),
