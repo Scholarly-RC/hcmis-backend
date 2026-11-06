@@ -103,6 +103,8 @@ class FakeUserEvaluationRepository:
         quarter=None,
         year=None,
         is_finalized=None,
+        evaluator_id=None,
+        is_submitted=None,
     ):
         items = list(self.items.values())
         if evaluatee_id is not None:
@@ -115,6 +117,19 @@ class FakeUserEvaluationRepository:
             items = [item for item in items if item.year == year]
         if is_finalized is not None:
             items = [item for item in items if item.is_finalized == is_finalized]
+        if evaluator_id is not None or is_submitted is not None:
+            items = [
+                item
+                for item in items
+                if any(
+                    (evaluator_id is None or evaluation.evaluator_id == evaluator_id)
+                    and (
+                        is_submitted is None
+                        or (evaluation.date_submitted is not None) == is_submitted
+                    )
+                    for evaluation in item.evaluations
+                )
+            ]
         return items
 
     async def get_by_id(self, user_evaluation_id: int):
@@ -1607,6 +1622,19 @@ def test_staff_can_rate_only_assigned_evaluations(monkeypatch):
     assert assigned_evaluation.evaluator_id == UUID(int=3)
     assert self_evaluation.evaluator_id == UUID(int=1)
     assert assigned_evaluation.id != self_evaluation.id
+
+    async def list_assigned_cycles():
+        return await performance_service.list_user_evaluations(
+            session,
+            is_finalized=True,
+            current_user_id=UUID(int=3),
+            is_staff=True,
+            evaluator_id=UUID(int=3),
+            is_submitted=False,
+        )
+
+    assigned_cycles = anyio.run(list_assigned_cycles)
+    assert [cycle.id for cycle in assigned_cycles] == [user_evaluation.id]
 
     with pytest.raises(PermissionDeniedError):
         anyio.run(

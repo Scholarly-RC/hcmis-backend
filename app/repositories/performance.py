@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -72,6 +72,8 @@ class UserEvaluationRepository:
         quarter: str | None = None,
         year: int | None = None,
         is_finalized: bool | None = None,
+        evaluator_id: UUID | None = None,
+        is_submitted: bool | None = None,
     ) -> List[UserEvaluation]:
         statement = (
             select(UserEvaluation)
@@ -92,6 +94,19 @@ class UserEvaluationRepository:
             statement = statement.where(UserEvaluation.year == year)
         if is_finalized is not None:
             statement = statement.where(UserEvaluation.is_finalized.is_(is_finalized))
+        evaluation_filters = []
+        if evaluator_id is not None:
+            evaluation_filters.append(Evaluation.evaluator_id == evaluator_id)
+        if is_submitted is not None:
+            evaluation_filters.append(
+                Evaluation.date_submitted.is_not(None)
+                if is_submitted
+                else Evaluation.date_submitted.is_(None)
+            )
+        if evaluation_filters:
+            statement = statement.where(
+                UserEvaluation.evaluations.any(and_(*evaluation_filters))
+            )
         result = await self.session.execute(statement)
         return list(result.scalars().unique().all())
 
