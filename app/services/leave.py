@@ -6,6 +6,7 @@ from typing import TypedDict
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_attribute
 
 from app.core.capabilities import is_staff_user
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
@@ -699,7 +700,7 @@ async def reset_leave_credit(session: AsyncSession, user_id: UUID) -> LeaveCredi
         raise NotFoundError("User not found.")
 
     leave_credit = await _ensure_leave_credit(session, user_id)
-    leave_credit.used_credits = 0
+    set_attribute(leave_credit, "used_credits", Decimal("0"))
     leave_credit = await LeaveCreditRepository(session).save(leave_credit)
     await _notify_user(
         session,

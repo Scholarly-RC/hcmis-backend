@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_attribute
 
 from app.core.security import hash_password
 from app.models.app_log import AppLog
@@ -151,8 +153,8 @@ async def _upsert_leave_credit(
         await session.flush()
         return leave_credit
 
-    leave_credit.credits = credits
-    leave_credit.used_credits = used_credits
+    set_attribute(leave_credit, "credits", Decimal(credits))
+    set_attribute(leave_credit, "used_credits", Decimal(used_credits))
     return leave_credit
 
 
