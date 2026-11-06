@@ -419,13 +419,25 @@ async def list_user_evaluations(
     is_finalized: bool | None = None,
     current_user_id: UUID | None = None,
     is_staff: bool = False,
+    evaluator_id: UUID | None = None,
+    is_submitted: bool | None = None,
 ) -> list[UserEvaluation]:
+    if (
+        evaluator_id is not None
+        and current_user_id is not None
+        and evaluator_id != current_user_id
+        and not is_staff
+    ):
+        raise PermissionDeniedError("Cannot list evaluations assigned to another evaluator.")
+
     items = await UserEvaluationRepository(session).list(
         evaluatee_id=evaluatee_id,
         questionnaire_id=questionnaire_id,
         quarter=quarter,
         year=year,
         is_finalized=is_finalized,
+        evaluator_id=evaluator_id,
+        is_submitted=is_submitted,
     )
     if is_staff or current_user_id is None:
         return items

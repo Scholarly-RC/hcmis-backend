@@ -375,6 +375,8 @@ async def read_user_evaluations(
     quarter: str | None = None,
     year: int | None = None,
     is_finalized: bool | None = None,
+    evaluator_id: UUID | None = None,
+    is_submitted: bool | None = None,
     session: AsyncSession = Depends(get_db_session),
     current_user: User = Depends(get_current_user),
 ) -> list[UserEvaluation]:
@@ -385,6 +387,8 @@ async def read_user_evaluations(
         quarter=quarter,
         year=year,
         is_finalized=is_finalized,
+        evaluator_id=evaluator_id,
+        is_submitted=is_submitted,
         current_user_id=current_user.id,
         is_staff=is_staff_user(current_user),
     )
